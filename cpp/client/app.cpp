@@ -235,6 +235,7 @@ bool App::start(const AppConfig& config, std::string& errorOut) {
     // A missing settings file is a first run, not a failure: the defaults in
     // ClientSettings are already the shipped configuration.
     menus_.settings().load(settingsPath());
+    if (!menus_.settings().languageChosen) menus_.settings().language = ui::systemLanguage();
     ui::setLanguage(menus_.settings().language);
     // Where the asset browser starts, and which file it reloads the settings
     // from when it saves one.

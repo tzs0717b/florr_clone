@@ -2,11 +2,15 @@
 
 #include "client/ui/menus.h"
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
+
 namespace flix {
 namespace ui {
 namespace {
 
-Language gLanguage = Language::Zh;
+Language gLanguage = Language::En;
 
 struct Entry {
     const char* en;
@@ -188,6 +192,26 @@ static_assert(sizeof(kTable) / sizeof(kTable[0]) == static_cast<std::size_t>(Msg
 } // namespace
 
 void setLanguage(Language lang) { gLanguage = lang; }
+
+#ifdef __EMSCRIPTEN__
+EM_JS(int, flix_browser_prefers_zh, (), {
+    try {
+        const langs = (navigator.languages && navigator.languages.length) ? navigator.languages
+                                                                          : [navigator.language || ''];
+        return String(langs[0] || '').toLowerCase().startsWith('zh') ? 1 : 0;
+    } catch (e) {
+        return 0;
+    }
+});
+#endif
+
+Language systemLanguage() {
+#ifdef __EMSCRIPTEN__
+    return flix_browser_prefers_zh() ? Language::Zh : Language::En;
+#else
+    return Language::En;
+#endif
+}
 Language language() { return gLanguage; }
 
 const char* tr(Msg id) {

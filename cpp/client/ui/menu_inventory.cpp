@@ -319,7 +319,7 @@ std::vector<TooltipLine> petalTooltipLines(std::uint16_t petalIndex, Rarity rari
     // in mana and how long its reload is, then the wait between spawning and
     // acting -- a rose's heal, an orb's mana -- when it has one ("3.5s +
     // 1.5s"). A worn petal has no reload and florr prints nothing for it.
-    const std::string enName = titleCase(config.name);
+    const std::string& enName = config.name;
     TooltipLine title{petalNameTr(config.id, enName.c_str()), 20.0};
     if (!config.noPhysics) {
         if (stats.requiredMana > 0.0) {

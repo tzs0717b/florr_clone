@@ -1,4 +1,5 @@
-// UI language: Chinese / English. Default Chinese (AshFlor .161).
+// UI language: English / Chinese (from the aqiangei fork). English by default;
+// a browser preferring zh-* starts in Chinese. Switched in Settings.
 //
 // English source strings stay as Msg keys' fallback; tr() picks the active
 // language. menuTitle / controlTitle wrap the menus that already have English
@@ -196,6 +197,10 @@ enum class Msg : std::uint16_t {
 
 void setLanguage(Language lang);
 Language language();
+/// The language a first run starts in when the settings file names none:
+/// Chinese for a browser whose first preferred language is zh-*, English
+/// otherwise (and always natively).
+Language systemLanguage();
 
 /// Active-language string for `id`. Never null; falls back to English.
 const char* tr(Msg id);

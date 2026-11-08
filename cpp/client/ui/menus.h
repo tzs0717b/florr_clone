@@ -345,8 +345,13 @@ struct ClientSettings {
     /// the reference's own resume is dead and this one matches it.
     bool tutorialCompleted = false;
     int tutorialStep = 0;
-    /// UI language. Default Chinese; English is opt-in via Settings.
-    ui::Language language = ui::Language::Zh;
+    /// UI language, switched in Settings (header row, every tab). English
+    /// unless chosen otherwise; a first run with no saved choice follows the
+    /// browser's language (ui::systemLanguage), so a Chinese browser starts
+    /// in Chinese as the aqiangei fork did for everyone.
+    ui::Language language = ui::Language::En;
+    /// Whether `language` came from the settings file rather than the default.
+    bool languageChosen = false;
 
     ClientSettings();
 

@@ -826,7 +826,8 @@ bool ClientSettings::load(const std::string& path) {
         else if (key == "tutorialDone") tutorialCompleted = number != 0;
         else if (key == "tutorialStep") tutorialStep = number;
         else if (key == "language") {
-            language = (value == "en") ? ui::Language::En : ui::Language::Zh;
+            language = (value == "zh") ? ui::Language::Zh : ui::Language::En;
+            languageChosen = true;
         }
         else if (key == "notifRead") readNotifications.push_back(value);
         else if (key.rfind("key.", 0) == 0) {

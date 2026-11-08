@@ -556,7 +556,7 @@ void drawItemTile(Canvas& canvas, const SpriteCache& sprites, Rect rect, const I
 
     if (filled && tile.showName) {
         const PetalConfig& named = content().petal(tile.petalIndex);
-        const std::string enName = titleCase(named.name);
+        const std::string& enName = named.name;  // upstream shows names as written (C--)
         const std::string name = petalNameTr(named.id, enName.c_str());
         if (!name.empty()) {
             TextStyle label;
