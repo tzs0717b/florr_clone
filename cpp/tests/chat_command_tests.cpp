@@ -27,6 +27,12 @@ using namespace flix::testsupport;
 
 namespace {
 
+/// Far enough on that every biome's boss clocks, unique and apex, have run
+/// down. Was one apex cooldown, the longer of the two -- the merged game has
+/// no apex cooldown (kApexSpawnCooldownMillis is 0), so it is the unique's.
+constexpr double kAllBossClocksReadyMillis =
+    std::max(kApexSpawnCooldownMillis, kUniqueSpawnCooldownMillis);
+
 /// `/admin spawn <mob> <rarity> <x> <y> 1`, the console an operator uses.
 void adminSpawnAt(NetClient& client, const char* mob, const char* rarity, Vec2 at) {
     client.sendChat("/admin spawn " + std::string(mob) + " " + rarity + " " +
@@ -694,7 +700,7 @@ TEST(a_unique_from_the_console_restarts_its_biome_clock) {
 
     // Every clock is dealt within one cooldown of the first spawner pass, so
     // one apex cooldown on, all of them stand ready.
-    h.clock += kApexSpawnCooldownMillis;
+    h.clock += kAllBossClocksReadyMillis;
     h.step(1, {&client});
 
     CHECK(say(h, client, "/admin spawn bee unique"));
@@ -798,7 +804,7 @@ TEST(a_boss_standing_at_a_restart_hands_its_clock_back) {
         client.joinGame(1920, 1080, {}, "Boss");
         CHECK(h.stepUntil({&client},
                           [&] { return client.status() == NetClient::Status::Playing; }, 200));
-        h.clock += kApexSpawnCooldownMillis;
+        h.clock += kAllBossClocksReadyMillis;
         h.step(1, {&client});
 
         const std::uint16_t bee = content().mobIndex("bee");
@@ -875,7 +881,7 @@ TEST(a_boss_cleared_by_killall_is_saved_gone_by_a_save_straight_after) {
     CHECK(loginAs(h, client, "boss", "password7"));
     client.joinGame(1920, 1080, {}, "Boss");
     CHECK(h.stepUntil({&client}, [&] { return client.status() == NetClient::Status::Playing; }, 200));
-    h.clock += kApexSpawnCooldownMillis;
+    h.clock += kAllBossClocksReadyMillis;
     h.step(1, {&client});
     CHECK(say(h, client, "/admin spawn bee unique"));
     CHECK(sawText(client, "Spawned unique bee"));

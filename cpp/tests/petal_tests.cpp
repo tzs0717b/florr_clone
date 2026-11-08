@@ -2554,14 +2554,17 @@ TEST(a_leaf_heals_whatever_the_stance) {
     }
 }
 
-/// What a flower held at half health gains over `ticks`, so no heal is lost
-/// to the cap. Health is looked up again on every use: the ring pass may add
-/// components to the flower, which moves its row.
+/// What a flower held at a quarter health gains over `ticks`, so no heal is
+/// lost to the cap. Health is looked up again on every use: the ring pass may
+/// add components to the flower, which moves its row. Given before the merged
+/// game's flat player-heal multiplier (kPlayerHealMultiplier, landHeal), so
+/// the figures below stay the petals' own heal rates; a quarter rather than
+/// half, as the multiplied heal of two stacks would otherwise reach the cap.
 double gainOver(Rig& rig, int ticks) {
-    const double half = rig.world.get<Health>(rig.player).max * 0.5;
-    rig.world.get<Health>(rig.player).current = half;
+    const double low = rig.world.get<Health>(rig.player).max * 0.25;
+    rig.world.get<Health>(rig.player).current = low;
     rig.tick(ticks);
-    return rig.world.get<Health>(rig.player).current - half;
+    return (rig.world.get<Health>(rig.player).current - low) / kPlayerHealMultiplier;
 }
 
 TEST(a_totem_heals_for_ten_seconds_after_each_kill_and_kills_stack) {

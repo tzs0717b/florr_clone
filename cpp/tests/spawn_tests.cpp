@@ -1666,6 +1666,7 @@ TEST(every_body_a_dense_map_places_stands_on_open_ground) {
                                       farTy, Realm::Overworld));
         world.get<Transform>(body).position = Terrain::tileCenter(farTx, farTy);
     }
+    const Vec2 deathSite = world.get<Transform>(body).position;
     CHECK(h.stepUntil({&client}, [&] { return client.dead(); }));
     client.requestRespawn();
     CHECK(h.stepUntil({&client}, [&] {
@@ -1683,7 +1684,9 @@ TEST(every_body_a_dense_map_places_stands_on_open_ground) {
     CHECK(reborn != NULL_ENTITY);
     if (reborn != NULL_ENTITY) {
         CHECK(!terrain.blocked(world.get<Transform>(reborn).position, Realm::Overworld));
-        CHECK(map != nullptr && inSpawnPoint(*map, "hollow", world.get<Transform>(reborn).position));
+        // Continue stands the flower back up beside its corpse (the merged
+        // game's in-place respawn, respawnPosition), not at the door.
+        CHECK(distance(world.get<Transform>(reborn).position, deathSite) < 400.0);
     }
 
     // Drops last: they are scattered off a corpse and pushed back out of

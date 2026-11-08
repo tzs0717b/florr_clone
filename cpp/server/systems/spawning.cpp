@@ -163,7 +163,10 @@ Entity freshestAttacker(World& world, const Bounty* bounty, Realm realm,
         }
         const double growth = share.damage - before;
         if (!(growth > bestGrowth)) continue;
-        const Entity body = liveContributorBody(world, share);
+        // A share with no connection (a bot, a harness flower) is its own body,
+        // as before shares carried one: liveContributorBody only follows
+        // players, and would drop an attacker that is not one.
+        const Entity body = share.owner != 0 ? liveContributorBody(world, share) : share.player;
         if (body == NULL_ENTITY || !attackerUsable(world, body, realm)) continue;
         best = body;
         bestGrowth = growth;
