@@ -3007,7 +3007,7 @@
                         {
                          "name":"difficulty",
                          "type":"float",
-                         "value":90
+                         "value":160
                         }, 
                         {
                          "name":"mobs",
@@ -3046,7 +3046,7 @@
                         {
                          "name":"difficulty",
                          "type":"float",
-                         "value":90
+                         "value":160
                         }, 
                         {
                          "name":"mobs",
@@ -3397,7 +3397,7 @@
                         {
                          "name":"difficulty",
                          "type":"float",
-                         "value":90
+                         "value":160
                         }, 
                         {
                          "name":"mobs",
@@ -3436,7 +3436,7 @@
                         {
                          "name":"difficulty",
                          "type":"float",
-                         "value":85
+                         "value":145
                         }, 
                         {
                          "name":"mobs",
@@ -3475,7 +3475,7 @@
                         {
                          "name":"difficulty",
                          "type":"float",
-                         "value":90
+                         "value":160
                         }, 
                         {
                          "name":"mobs",
@@ -3514,7 +3514,7 @@
                         {
                          "name":"difficulty",
                          "type":"float",
-                         "value":90
+                         "value":160
                         }, 
                         {
                          "name":"mobs",
@@ -3553,7 +3553,7 @@
                         {
                          "name":"difficulty",
                          "type":"float",
-                         "value":85
+                         "value":145
                         }, 
                         {
                          "name":"mobs",
@@ -3787,7 +3787,7 @@
                         {
                          "name":"difficulty",
                          "type":"float",
-                         "value":85
+                         "value":145
                         }, 
                         {
                          "name":"mobs",
@@ -3826,7 +3826,7 @@
                         {
                          "name":"difficulty",
                          "type":"float",
-                         "value":90
+                         "value":160
                         }, 
                         {
                          "name":"mobs",
@@ -3865,7 +3865,7 @@
                         {
                          "name":"difficulty",
                          "type":"float",
-                         "value":90
+                         "value":160
                         }, 
                         {
                          "name":"mobs",
@@ -3904,7 +3904,7 @@
                         {
                          "name":"difficulty",
                          "type":"float",
-                         "value":90
+                         "value":160
                         }, 
                         {
                          "name":"mobs",
@@ -3943,7 +3943,7 @@
                         {
                          "name":"difficulty",
                          "type":"float",
-                         "value":90
+                         "value":160
                         }, 
                         {
                          "name":"mobs",
@@ -3982,7 +3982,7 @@
                         {
                          "name":"difficulty",
                          "type":"float",
-                         "value":90
+                         "value":160
                         }, 
                         {
                          "name":"mobs",
@@ -4138,7 +4138,7 @@
                         {
                          "name":"difficulty",
                          "type":"float",
-                         "value":100
+                         "value":175
                         }, 
                         {
                          "name":"mobs",

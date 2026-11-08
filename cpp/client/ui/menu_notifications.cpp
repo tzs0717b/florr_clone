@@ -411,7 +411,7 @@ bool NotificationsPanel::render(MenuContext& ctx) {
     heading.size = 20.0;
     heading.fill = kPaper;
     heading.baseline = Baseline::Top;
-    text(canvas, "Notifications", panel.x + kPadding, panel.y + kPadding, heading);
+    text(canvas, menuTitle(MenuId::Notifications), panel.x + kPadding, panel.y + kPadding, heading);
 
     // Neither header button has a hover or a press state in the reference.
     const Rect markAllRect{panel.right() - 180.0, panel.y + 10.0, 120.0, 30.0};

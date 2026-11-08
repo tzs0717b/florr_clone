@@ -43,7 +43,11 @@ struct Fixture {
 
     Fixture() { controls.layout(kPhoneWidth, kPhoneHeight, inGameLoadoutBarHeight()); }
 
-    void feed(std::vector<TouchEvent> events) { controls.update(events); }
+    double time = 0.0;
+    void feed(std::vector<TouchEvent> events, double dt = 0.0) {
+        time += dt;
+        controls.update(events, time);
+    }
 };
 
 /// Every point the controls answer for, on a coarse grid. Used by the layout
@@ -67,6 +71,23 @@ TEST(controls_that_have_never_been_laid_out_claim_nothing) {
     const MobileControls fresh;
     CHECK(!fresh.hits(0, 0));
     CHECK(!fresh.hits(10, 10));
+}
+
+TEST(the_stick_approach_pad_claims_a_thumb_starting_below_the_knob) {
+    // Thumbs often land under the stick and slide up. That contact has to
+    // belong to movement, or it opens the chat slot instead.
+    Fixture f;
+    const Vec2 centre = f.controls.stickCentre();
+    const double r = f.controls.stickHitRadius();
+    CHECK(r > 0.0);
+    CHECK(f.controls.hits(centre.x, centre.y + r + 40.0));
+    CHECK(!f.controls.hits(centre.x + r + 20.0, centre.y + r + 40.0));
+
+    f.feed({began(1, centre.x, centre.y + r + 40.0),
+            moved(1, centre.x + 80.0, centre.y)});
+    MobileControls::Stick stick;
+    CHECK(f.controls.stick(stick));
+    CHECK(stick.magnitude > 0.0);
 }
 
 TEST(the_stick_reports_the_direction_it_is_pushed_and_how_far) {
@@ -195,6 +216,35 @@ TEST(reset_drops_every_contact) {
     CHECK(!f.controls.stick(stick));
     CHECK(!f.controls.attackPressed());
     CHECK(!f.controls.retractPressed());
+    CHECK(!f.controls.presetsHeld());
+    CHECK(!f.controls.consumeSwapRowsTap());
+}
+
+TEST(a_short_tap_on_r_swaps_loadout_rows) {
+    Fixture f;
+    const Vec2 at = f.controls.swapCentre();
+    f.feed({began(1, at.x, at.y)});
+    CHECK(!f.controls.presetsHeld());
+    // Release before the long-press threshold.
+    f.feed({ended(1, at.x, at.y)}, 0.1);
+    CHECK(f.controls.consumeSwapRowsTap());
+    CHECK(!f.controls.consumeSwapRowsTap());
+    CHECK(!f.controls.presetsHeld());
+}
+
+TEST(a_long_press_on_r_opens_presets_without_swapping) {
+    Fixture f;
+    const Vec2 at = f.controls.swapCentre();
+    f.feed({began(1, at.x, at.y)});
+    // Past the threshold while still held: presetsHeld edges true so
+    // MenuSystem can arm its sticky L bank; no row-swap tap is queued.
+    // After release presetsHeld is false -- stickiness lives in MenuSystem.
+    f.feed({}, kSwapLongPressSeconds + 0.05);
+    CHECK(f.controls.presetsHeld());
+    CHECK(!f.controls.consumeSwapRowsTap());
+    f.feed({ended(1, at.x, at.y)}, 0.05);
+    CHECK(!f.controls.presetsHeld());
+    CHECK(!f.controls.consumeSwapRowsTap());
 }
 
 TEST(the_row_swap_button_stands_to_the_left_of_retract) {
@@ -263,7 +313,7 @@ TEST(the_controls_sit_clear_of_the_hud_they_share_the_bottom_of_the_screen_with)
 
 TEST(every_point_the_controls_answer_for_belongs_to_exactly_one_of_them) {
     // The invariant a narrow viewport threatens: a phone held upright has no
-    // room for the three side by side at full size, and controls that simply
+    // room for the four side by side at full size, and controls that simply
     // kept their sizes would overlap -- a finger landing in the overlap would
     // drive whichever the hit test happened to check first, which is not a
     // control anybody can use. Everything shrinks together instead.
@@ -306,6 +356,18 @@ TEST(a_landscape_viewport_is_laid_out_at_full_size) {
     controls.layout(kPhoneWidth, kPhoneHeight, inGameLoadoutBarHeight());
     CHECK_NEAR(controls.stickCentre().x, 150.0 * 2.4, 1e-9);
     CHECK_NEAR(controls.attackCentre().x, kPhoneWidth - (30.0 + 46.0) * 2.4, 1e-9);
+}
+
+TEST(the_stick_claims_an_approach_pad_below_it) {
+    // A thumb often starts below the knob and slides up. That first contact
+    // used to land on the chat slot; the pad under the stick claims it instead.
+    Fixture f;
+    const Vec2 centre = f.controls.stickCentre();
+    const double below = centre.y + f.controls.stickHitRadius() + 40.0;
+    CHECK(f.controls.hits(centre.x, below));
+    f.feed({began(1, centre.x, below)});
+    MobileControls::Stick stick;
+    CHECK(f.controls.stick(stick));
 }
 
 TEST(an_unchosen_touch_setting_is_the_devices_to_answer) {

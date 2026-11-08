@@ -188,7 +188,8 @@ struct Session {
 
     /// The flower's name, typed on the title screen and sent with JoinGame.
     /// Separate from `username`: the account is who you are, this is what the
-    /// nameplate says, and one player may use several. Empty means "Unnamed".
+    /// nameplate says, and one player may use several. Empty at join falls
+    /// back to `username` (not "Unnamed").
     std::string displayName;
 
     /// Input sequence already applied. Inputs at or below this are replays and
@@ -271,8 +272,8 @@ inline constexpr double kChatCooldownMillis = 500.0;
 bool claimChatCooldown(Session&, double nowMillis);
 
 /// Strips control characters and clamps a typed flower name to the browser
-/// build's twenty characters. An empty or all-blank name becomes "Unnamed",
-/// because a nameplate has to say something.
+/// build's twenty characters. An empty or all-blank name becomes "Unnamed"
+/// here; JoinGame replaces that with the account username when one is known.
 std::string sanitizePlayerName(const std::string& name);
 
 /// Strips control characters and clamps length for anything a player typed

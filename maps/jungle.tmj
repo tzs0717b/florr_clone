@@ -5166,7 +5166,7 @@
                         {
                          "name":"difficulty",
                          "type":"float",
-                         "value":100
+                         "value":160
                         }, 
                         {
                          "name":"mobs",

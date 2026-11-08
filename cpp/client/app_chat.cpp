@@ -32,6 +32,7 @@
 #include <utility>
 
 #include "client/ui/draw.h"
+#include "client/ui/i18n.h"
 #include "client/ui/remote_image.h"
 #include "client/ui/text.h"
 #include "client/ui/text_input.h"
@@ -116,17 +117,17 @@ static_assert((1u << kTabAdmin) == kChatAdminChannel &&
                   (1u << kChatTabCount) - 1u == kChatChannelsAll);
 
 struct ChatTabStyle {
-    const char* label;
+    Msg label;
     std::uint32_t colour;
 };
 constexpr ChatTabStyle kChatTabStyles[kChatTabCount] = {
-    {"Local", 0xFFFFFFu},
-    {"Global", 0xFFE65Du},
-    {"Squad", 0xFF94C9u},
-    {"Guild", 0x1FDBDEu},
-    {"Whisper", 0x6666FFu},
+    {Msg::ChatLocal, 0xFFFFFFu},
+    {Msg::ChatGlobal, 0xFFE65Du},
+    {Msg::ChatSquad, 0xFF94C9u},
+    {Msg::ChatGuild, 0x1FDBDEu},
+    {Msg::ChatWhisper, 0x6666FFu},
     // Legendary's red, so an announcement stands out from every player's line.
-    {"Admin", kRarityColors[rarityIndex(Rarity::Legendary)]},
+    {Msg::ChatAdmin, kRarityColors[rarityIndex(Rarity::Legendary)]},
 };
 
 /// The tab a channel's lines are filed under, or -1 for the server's own,
@@ -152,7 +153,7 @@ ui::InputPrefix chatPrefix(int tab, const std::string& whisperPartner) {
     if (tab == kTabWhisper && !whisperPartner.empty()) {
         return {"[To " + whisperPartner + "]", style.colour};
     }
-    return {std::string("[") + style.label + "]", style.colour};
+    return {std::string("[") + tr(style.label) + "]", style.colour};
 }
 
 /// The bare words that switch the channel Enter sends to, in strip order.
@@ -575,7 +576,7 @@ std::vector<ChatToken> chatLineTokens(const ChatLine& line) {
         // An announcement is in its tab's colour throughout, text included.
         if (line.author.empty() || tab == kTabAdmin) bodyFill = style.colour;
         if (!line.author.empty()) {
-            word(std::string("[") + style.label + "]", style.colour);
+            word(std::string("[") + tr(style.label) + "]", style.colour);
             if (line.channel == net::ChatChannel::WhisperSent) word("To", style.colour);
             signature(line.author, tab == kTabLocal ? kChatAuthorGrey : style.colour);
         }
@@ -756,6 +757,9 @@ bool App::pressedChatBox() const {
     // and the slot at 115, so they really do overlap -- and the two panels
     // that hide the chat entirely leave the box behind them.
     if (menus_.capturesMouse(pointer)) return false;
+    // Stick / A / B own the contact (and its approach pad). A mirrored press
+    // that somehow still lands here must not open chat mid-strafe.
+    if (touchControlsVisible() && mobile_.hits(pointer.x, pointer.y)) return false;
     return window_.mousePressed(MouseButton::Left) && chatBox_.contains(pointer);
 }
 
@@ -767,7 +771,10 @@ bool App::scrollChat() {
     const bool suggestingNow = chatOpen_ && chatSuggestion_ >= 0;
     if (pan.active && menus_.settings().showChat && chatColumn_.w > 0 && !suggestingNow) {
         const Vec2 origin{pan.originX, pan.originY};
-        if (chatColumn_.contains(origin) && !menus_.capturesMouse(origin)) {
+        // A pan that began on the stick (or its approach pad) is movement, not
+        // reading back through the transcript — even if the column overlaps.
+        if (chatColumn_.contains(origin) && !menus_.capturesMouse(origin) &&
+            !(touchControlsVisible() && mobile_.hits(origin.x, origin.y))) {
             // Dragging DOWN pulls older lines into view, and older is further
             // off the bottom, which is what the offset counts. The draw clamps
             // the ceiling, as it does for the wheel.
@@ -974,8 +981,17 @@ Rect App::titleChatBox(int viewWidth, int viewHeight) {
     (void)viewWidth;
     // Bottom-left, clear of the icon column, under the transcript's left edge.
     // Fixed rather than derived, and the same slot the game draws, so both
-    // read it from here.
-    return {kChatFieldX, viewHeight - kChatFieldUp, kChatFieldWidth, kChatFieldHeight};
+    // read it from here. With touch controls up, lift it clear of the stick
+    // the same way drawChat does.
+    Rect field{kChatFieldX, viewHeight - kChatFieldUp, kChatFieldWidth, kChatFieldHeight};
+    if (touchControlsVisible() && mobile_.stickHitRadius() > 0.0) {
+        constexpr double kGap = 12.0;
+        constexpr double kMobileFieldWidth = 220.0;
+        field.w = kMobileFieldWidth;
+        field.y = mobile_.stickCentre().y - mobile_.stickHitRadius() - kGap - field.h;
+        if (field.y < 8.0) field.y = 8.0;
+    }
+    return field;
 }
 
 void App::drawTitleChat(Canvas& canvas, double time) {
@@ -1098,15 +1114,33 @@ bool App::handleClientCommand(const std::string& message) {
 
 void App::drawChat(Canvas& canvas, double time) {
     const double bottom = canvas.height();
-    const Rect panel{kChatX, bottom - kChatPanelUp, kChatPanelWidth,
-                     kChatPanelUp - kChatPanelDown};
+    Rect panel{kChatX, bottom - kChatPanelUp, kChatPanelWidth,
+               kChatPanelUp - kChatPanelDown};
+    Rect field{kChatFieldX, bottom - kChatFieldUp, kChatFieldWidth, kChatFieldHeight};
+    // Touch HUD: the closed slot used to sit under the thumb's path into the
+    // stick (AshFlor lifts chat above the joystick for the same reason). Park
+    // the field above the stick's hit ring and shorten the transcript so it
+    // does not cover the knob.
+    if (touchControlsVisible() && mobile_.stickHitRadius() > 0.0) {
+        constexpr double kGap = 12.0;
+        constexpr double kMobileFieldWidth = 220.0;
+        constexpr double kMobilePanelHeight = 180.0;
+        field.w = kMobileFieldWidth;
+        field.y = mobile_.stickCentre().y - mobile_.stickHitRadius() - kGap - field.h;
+        if (field.y < 8.0) field.y = 8.0;
+        const double panelBottom = field.y - 8.0;
+        const double panelTop = std::max(8.0, panelBottom - kMobilePanelHeight);
+        if (panelBottom > panelTop + 40.0) {
+            panel = {kChatX, panelTop, kChatPanelWidth, panelBottom - panelTop};
+        }
+    }
     const Rect column{panel.x + kChatTextInset, panel.y, panel.w - kChatTextInset * 2, panel.h};
-    const Rect field{kChatFieldX, bottom - kChatFieldUp, kChatFieldWidth, kChatFieldHeight};
     // The transcript, the strip over it while it is up, and the line under
     // it, as one box. A press outside it closes the chat, and a press inside
     // must not -- selecting a message and picking a channel are both done
     // with the box open.
-    const double regionTop = chatOpen_ ? bottom - kChatTabsUp : panel.y;
+    const double regionTop = chatOpen_ ? std::min(bottom - kChatTabsUp, panel.y - kChatTabHeight - 4.0)
+                                       : panel.y;
     chatRegion_ = {panel.x, regionTop, panel.w, field.bottom() - regionTop};
     // For the wheel, which runs before this draw and needs last frame's box.
     chatColumn_ = panel;
@@ -1120,7 +1154,14 @@ void App::drawChat(Canvas& canvas, double time) {
                          static_cast<float>(kChatPanelRadius));
         setFill(canvas, kInk, kChatPlateAlpha);
         canvas.fill();
-        drawChatTabs(canvas, bottom);
+        // Tabs sit just above the panel. On mobile the panel is lifted, so the
+        // desktop "from the bottom edge" offset would leave them over the stick.
+        // drawChatTabs places the strip at `ref - kChatTabsUp`.
+        const double tabsRef =
+            (touchControlsVisible() && mobile_.stickHitRadius() > 0.0)
+                ? (panel.y - 4.0 - kChatTabHeight + kChatTabsUp)
+                : bottom;
+        drawChatTabs(canvas, tabsRef);
     }
 
     // A leading slash swaps the transcript for the command list -- the
@@ -1352,7 +1393,7 @@ void App::drawChatTabs(Canvas& canvas, double bottom) {
     for (int tab = 0; tab < kChatTabCount; ++tab) {
         const ChatTabStyle& style = kChatTabStyles[tab];
         const double width =
-            kChatTabLabelX + measure(style.label, kChatTabLabelSize) + kChatTabPadRight;
+            kChatTabLabelX + measure(tr(style.label), kChatTabLabelSize) + kChatTabPadRight;
         const Rect whole{x, y, width, kChatTabHeight};
 
         canvas.beginPath();
@@ -1381,7 +1422,7 @@ void App::drawChatTabs(Canvas& canvas, double bottom) {
         label.size = kChatTabLabelSize;
         label.fill = style.colour;
         label.baseline = Baseline::Alphabetic;
-        text(canvas, style.label, x + kChatTabLabelX, y + kChatTabBaselineDown, label);
+        text(canvas, tr(style.label), x + kChatTabLabelX, y + kChatTabBaselineDown, label);
 
         chatTabs_[static_cast<std::size_t>(tab)] = whole;
         chatTabChecks_[static_cast<std::size_t>(tab)] = {x, y, kChatTabLabelX - 2.0,
@@ -1408,7 +1449,7 @@ void App::drawChatField(Canvas& canvas, Rect box, double time) {
             window_.setCursorShape(CursorShape::Hand);
         }
     } else {
-        ui::inputField(canvas, box, chatDraft_, "Press Enter to chat...", false, time,
+        ui::inputField(canvas, box, chatDraft_, ui::tr(ui::Msg::ChatPressEnter), false, time,
                        &chatField_, false, ui::InputLook::Overlay);
     }
 }

@@ -20,13 +20,14 @@
 //           for movement, the petal keys, chat and zoom and what MenuSystem
 //           reads for the panel keys and the two in-game switches; Show
 //           Hitboxes -> settings.render.hitboxes, Use Mouse Controls ->
-//           settings.useMouseControls, Enable Debug Menu button ->
-//           settings.showDebugButton, Request Mobile ->
-//           settings.requestMobile, which is what App puts the on-screen
-//           stick and its two buttons up from, Hide Other Players' Petals
-//           and Pets -> settings.render.hideOtherPetals/hideOtherPets, Show
-//           Admins on Leaderboard -> settings.showAdminsOnLeaderboard, which
-//           the leaderboard panel sends with its request, Screen Shake ->
+//           settings.useMouseControls, Movement Helper / Invert Attack /
+//           Invert Defend -> settings.movementHelper/invertAttack/invertDefend,
+//           Enable Debug Menu button -> settings.showDebugButton, Request
+//           Mobile -> settings.requestMobile, which is what App puts the
+//           on-screen stick and its two buttons up from, Hide Other Players'
+//           Petals and Pets -> settings.render.hideOtherPetals/hideOtherPets,
+//           Show Admins on Leaderboard -> settings.showAdminsOnLeaderboard,
+//           which the leaderboard panel sends with its request, Screen Shake ->
 //           settings.render.screenShake, Low Latency Canvas
 //           -> settings.desynchronizedCanvas, which App hands to
 //           Window::setDesynchronized (browser only; inert natively). These
@@ -143,6 +144,10 @@ enum Toggle : int {
     kClassicLoadoutBar,
     kUseMouseControls,
     kRequestMobile,
+    kMovementHelper,
+    kInvertAttack,
+    kInvertDefend,
+    kAutoSaveLoadoutPreset,
     kHideOtherPetals,
     kHideOtherPets,
     kDesynchronizedCanvas,
@@ -152,7 +157,14 @@ enum Toggle : int {
 
 enum Slider : int { kRenderScale, kMobFramerate, kInterpolation };
 
-enum Button : int { kSaveControls, kResetControls, kResetTutorial, kGrantAdmin };
+enum Button : int {
+    kSaveControls,
+    kResetControls,
+    kResetTutorial,
+    kGrantAdmin,
+    kLanguageZh,
+    kLanguageEn,
+};
 
 /// The Controls tab's rows are ControlAction's own order, and every binding
 /// they show lives in ClientSettings -- see controlMeta() in menus.h. The
@@ -243,6 +255,10 @@ bool* toggleValue(PanelState& st, ClientSettings& settings, int id) {
         case kClassicLoadoutBar: return &settings.classicLoadoutBar;
         case kUseMouseControls: return &settings.useMouseControls;
         case kRequestMobile: return &settings.requestMobile;
+        case kMovementHelper: return &settings.movementHelper;
+        case kInvertAttack: return &settings.invertAttack;
+        case kInvertDefend: return &settings.invertDefend;
+        case kAutoSaveLoadoutPreset: return &settings.autoSaveLoadoutPreset;
         case kHideOtherPetals: return &settings.render.hideOtherPetals;
         case kHideOtherPets: return &settings.render.hideOtherPets;
         case kScreenShake: return &settings.render.screenShake;
@@ -516,7 +532,7 @@ bool SettingsPanel::render(MenuContext& ctx) {
     // --- card ---------------------------------------------------------------
     panelCard(canvas, panel, kSettingsSkin);
 
-    text(canvas, "Settings", contentX, panel.y + kPad + kHeaderHeight * 0.5,
+    text(canvas, tr(Msg::Settings), contentX, panel.y + kPad + kHeaderHeight * 0.5,
          bodyStyle(20.0, kPaper, kInk));
 
     const bool inPanel = panel.contains(mouse);
@@ -529,9 +545,35 @@ bool SettingsPanel::render(MenuContext& ctx) {
         keepOpen = false;
     }
 
+    // Language sits in the header so it is reachable from every tab.
+    {
+        const double langY = panel.y + kPad + 4.0;
+        const double langH = 26.0;
+        const double langW = 72.0;
+        const double langGap = 6.0;
+        const double langRight = panel.right() - kPad - closeRect.w - 10.0;
+        const Rect enRect{langRight - langW, langY, langW, langH};
+        const Rect zhRect{enRect.x - langW - langGap, langY, langW, langH};
+        text(canvas, tr(Msg::Language), zhRect.x - 8.0, langY + langH * 0.5,
+             bodyStyle(12.0, kPaper, kInk, Align::Right));
+        auto langBtn = [&](Rect r, const char* caption, bool on, int id) {
+            const WidgetId self{Widget::Button, id};
+            if (inPanel && r.contains(mouse) && ctx.pressed()) st.pressed = self;
+            const bool hovered = inPanel && r.contains(mouse);
+            ui::button(canvas, r, caption, hovered && !on, st.pressed == self,
+                       gardnStyle(on ? kActionFill : kNeutralFill, 12.0));
+            if (hovered && ctx.released()) {
+                settings.language = (id == kLanguageZh) ? Language::Zh : Language::En;
+                setLanguage(settings.language);
+            }
+        };
+        langBtn(zhRect, tr(Msg::LanguageZh), settings.language == Language::Zh, kLanguageZh);
+        langBtn(enRect, tr(Msg::LanguageEn), settings.language == Language::En, kLanguageEn);
+    }
+
     // --- tab bar ------------------------------------------------------------
-    static constexpr std::array<const char*, kTabCount> kTabLabels = {
-        {"Controls", "Graphics", "Advanced", "Credits"}};
+    const std::array<const char*, kTabCount> kTabLabels = {
+        {tr(Msg::TabControls), tr(Msg::TabGraphics), tr(Msg::TabAdvanced), tr(Msg::TabCredits)}};
     const double tabW = (contentW - (kTabCount - 1) * kTabGap) / kTabCount;
     const double tabY = panel.y + kHeaderHeight + kPad + 5.0;
     for (int i = 0; i < kTabCount; ++i) {
@@ -581,7 +623,7 @@ bool SettingsPanel::render(MenuContext& ctx) {
 
     switch (st.tab) {
         case Tab::Controls: {
-            p.label("Controls", p.cy + 10.0, 15.0, kPaper, kInk);
+            p.label(tr(Msg::ControlsHeading), p.cy + 10.0, 15.0, kPaper, kInk);
             p.cy += 28.0;
 
             const double labelW = contentW * 0.55;
@@ -589,7 +631,7 @@ bool SettingsPanel::render(MenuContext& ctx) {
             for (int i = 0; i < kControlCount; ++i) {
                 const Rect box{contentX + labelW, p.cy, inputW, kKeyBoxHeight};
                 const bool editing = rebinding_ == i;
-                text(canvas, controlMeta(rowAction(i)).label, contentX,
+                text(canvas, controlTitle(rowAction(i)), contentX,
                      p.cy + kKeyBoxHeight * 0.5, bodyStyle(12.0, kPaper, kInk));
                 insetSurface(canvas, box, surfaceColour(editing, p.over(box)));
                 TextStyle keyText = bodyStyle(12.0, kInk, kInk, Align::Centre);
@@ -602,10 +644,9 @@ bool SettingsPanel::render(MenuContext& ctx) {
             // The preset chords are fixed, like the number row they ride on:
             // K1 is named after the keys that load it, so the keys cannot move.
             p.cy += 4.0;
-            p.label("Hold K or L + 1-0: load a saved loadout", p.cy + 8.0, 12.0, kPaper, kInk);
+            p.label(tr(Msg::HoldLoadPreset), p.cy + 8.0, 12.0, kPaper, kInk);
             p.cy += 20.0;
-            p.label("Shift + K or L + 1-0: save your loadout there", p.cy + 8.0, 12.0, kPaper,
-                    kInk);
+            p.label(tr(Msg::HoldSavePreset), p.cy + 8.0, 12.0, kPaper, kInk);
             p.cy += 20.0;
 
             p.cy += 10.0;
@@ -613,9 +654,9 @@ bool SettingsPanel::render(MenuContext& ctx) {
             // Every rebind is already live; the browser's Save Controls only
             // ever put up an alert, so this is the same button doing the same
             // amount of work.
-            p.button(Rect{contentX, p.cy, btnW, 30.0}, "Save Controls", kActionFill, 13.0,
+            p.button(Rect{contentX, p.cy, btnW, 30.0}, tr(Msg::SaveControls), kActionFill, 13.0,
                      kSaveControls);
-            if (p.button(Rect{contentX + btnW + 10.0, p.cy, btnW, 30.0}, "Reset to Default",
+            if (p.button(Rect{contentX + btnW + 10.0, p.cy, btnW, 30.0}, tr(Msg::ResetToDefault),
                          kNeutralFill, 13.0, kResetControls)) {
                 for (int i = 0; i < kControlCount; ++i) {
                     settings.bindControl(rowAction(i), controlMeta(rowAction(i)).defaultKey);
@@ -624,38 +665,43 @@ bool SettingsPanel::render(MenuContext& ctx) {
             }
             p.cy += 40.0;
 
-            p.checkbox(kNumberKeysUseItems, "Number Keys Use Items (off = swap loadout)");
-            p.checkbox(kUseMouseControls, "Use Mouse Controls (K toggles in-game)");
-            p.checkbox(kRequestMobile, "Request Mobile (touch joystick & attack/retract buttons)");
+            p.checkbox(kNumberKeysUseItems, tr(Msg::NumberKeysUseItems));
+            p.checkbox(kUseMouseControls, tr(Msg::UseMouseControls));
+            p.checkbox(kRequestMobile, tr(Msg::RequestMobile));
+            p.checkbox(kMovementHelper, tr(Msg::MovementHelper));
+            p.checkbox(kInvertAttack, tr(Msg::InvertAttack));
+            p.checkbox(kInvertDefend, tr(Msg::InvertDefend));
+            p.checkbox(kAutoSaveLoadoutPreset,
+                       trEnZh("Auto-save selected loadout preset", "自动保存当前配装预设"));
             break;
         }
 
         case Tab::Graphics: {
-            p.checkbox(kClassicLoadoutBar, "Classic Loadout Bar (smaller slots, wider gaps)");
-            p.checkbox(kShowHitboxes, "Show Hitboxes");
-            p.checkbox(kHideOtherPetals, "Hide Other Players' Petals");
-            p.checkbox(kHideOtherPets, "Hide Other Players' Pets");
-            p.checkbox(kScreenShake, "Screen Shake");
-            p.checkbox(kShowStats, "Show Performance Stats");
-            p.checkbox(kDynamicSkybox, "Dynamic Skybox");
-            p.checkbox(kMobDeathAnimation, "Mob Death Animation");
-            p.checkbox(kAntialiasing, "Anti-aliasing");
-            p.checkbox(kGpuAcceleration, "GPU Acceleration");
-            p.checkbox(kDesynchronizedCanvas, "Low Latency Canvas (may flicker)");
-            p.checkbox(kDisableUltraParticles, "Disable Ultra+ Particles");
-            p.checkbox(kShowConsoleLogs, "Show Console Logs");
+            p.checkbox(kClassicLoadoutBar, tr(Msg::ClassicLoadoutBar));
+            p.checkbox(kShowHitboxes, tr(Msg::ShowHitboxes));
+            p.checkbox(kHideOtherPetals, tr(Msg::HideOtherPetals));
+            p.checkbox(kHideOtherPets, tr(Msg::HideOtherPets));
+            p.checkbox(kScreenShake, tr(Msg::ScreenShake));
+            p.checkbox(kShowStats, tr(Msg::ShowStats));
+            p.checkbox(kDynamicSkybox, tr(Msg::DynamicSkybox));
+            p.checkbox(kMobDeathAnimation, tr(Msg::MobDeathAnimation));
+            p.checkbox(kAntialiasing, tr(Msg::Antialiasing));
+            p.checkbox(kGpuAcceleration, tr(Msg::GpuAcceleration));
+            p.checkbox(kDesynchronizedCanvas, tr(Msg::DesynchronizedCanvas));
+            p.checkbox(kDisableUltraParticles, tr(Msg::DisableUltraParticles));
+            p.checkbox(kShowConsoleLogs, tr(Msg::ShowConsoleLogs));
 
             p.cy += 5.0;
             // Render resolution snaps to 5%, so the thumb lands on values
             // worth naming rather than on 63%.
-            p.sliderRow(kRenderScale, "Render Resolution: ", "%", settings.renderScale, 0.25,
+            p.sliderRow(kRenderScale, tr(Msg::RenderResolution), "%", settings.renderScale, 0.25,
                         1.0, 0.05, 100.0, 0, kInk, 25.0);
             // The next two captions are outlined in the slider thumb's
             // leftover grey rather than black. The browser build does it too,
             // and the panel does not read the same with them "corrected".
-            p.sliderRow(kMobFramerate, "Mob Animation FPS: ", "", st.mobFramerate, 5.0, 60.0, 1.0,
+            p.sliderRow(kMobFramerate, tr(Msg::MobAnimationFps), "", st.mobFramerate, 5.0, 60.0, 1.0,
                         1.0, 0, kTrackGrey, 25.0);
-            p.sliderRow(kInterpolation, "Interpolation: ", "", settings.interpolation,
+            p.sliderRow(kInterpolation, tr(Msg::Interpolation), "", settings.interpolation,
                         0.05, 0.5, 0.01, 1.0, 2, kTrackGrey, 30.0);
 
             // Sits below the viewport until the list is scrolled, exactly as
@@ -663,7 +709,7 @@ bool SettingsPanel::render(MenuContext& ctx) {
             const bool armed =
                 st.tutorialResetArmed && ctx.timeSeconds < st.tutorialResetArmedUntil;
             if (p.button(Rect{contentX, p.cy, 160.0, 30.0},
-                         armed ? "Are you sure?" : "Reset Tutorial",
+                         armed ? tr(Msg::AreYouSure) : tr(Msg::ResetTutorial),
                          armed ? kDangerFill : kNeutralFill, 13.0, kResetTutorial)) {
                 if (armed) {
                     // What the browser's two localStorage.removeItem calls do.
@@ -683,7 +729,7 @@ bool SettingsPanel::render(MenuContext& ctx) {
         }
 
         case Tab::Advanced: {
-            p.label("Server IP:", p.cy + 10.0, 13.0, kPaper, kInk);
+            p.label(tr(Msg::ServerIp), p.cy + 10.0, 13.0, kPaper, kInk);
             p.cy += 25.0;
 
             const Rect field{contentX, p.cy, contentW, kFieldHeight};
@@ -696,10 +742,10 @@ bool SettingsPanel::render(MenuContext& ctx) {
             if (p.over(field)) ctx.window.setCursorShape(CursorShape::Text);
             p.cy += kFieldHeight + 15.0;
 
-            p.checkbox(kShowConsoleLogs, "Show Console Logs on Screen");
-            p.checkbox(kShowAdminCommands, "Show Admin Commands");
-            p.checkbox(kShowAdminsOnLeaderboard, "Show Admins on Leaderboard");
-            p.checkbox(kDebugMenuEnabled, "Enable Debug Menu button (J in-game)");
+            p.checkbox(kShowConsoleLogs, tr(Msg::ShowConsoleLogsOnScreen));
+            p.checkbox(kShowAdminCommands, tr(Msg::ShowAdminCommands));
+            p.checkbox(kShowAdminsOnLeaderboard, tr(Msg::ShowAdminsOnLeaderboard));
+            p.checkbox(kDebugMenuEnabled, tr(Msg::EnableDebugMenu));
 
             p.cy += 14.0;
             // Offline only: the row is there when this build has a server of
@@ -714,9 +760,9 @@ bool SettingsPanel::render(MenuContext& ctx) {
                     // say there is. The row stays so the panel goes on
                     // answering "am I an admin?" -- `isSkinAdmin` is the same
                     // flag the chat autocomplete hides its /admin rows behind.
-                    ui::button(canvas, grant, "Admin Granted", false, false,
+                    ui::button(canvas, grant, tr(Msg::AdminGranted), false, false,
                                gardnStyle(kNeutralFill, 14.0));
-                } else if (p.button(grant, "Grant Admin", kActionFill, 14.0, kGrantAdmin)) {
+                } else if (p.button(grant, tr(Msg::GrantAdmin), kActionFill, 14.0, kGrantAdmin)) {
                     // The app owns the server object in that build; the panel
                     // only says it was asked, exactly as the Account card's Log
                     // Out does. The label flips on its own once the server's

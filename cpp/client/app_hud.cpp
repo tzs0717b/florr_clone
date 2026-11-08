@@ -25,6 +25,8 @@
 #include <vector>
 
 #include "client/ease.h"
+#include "client/boss_bar_policy.h"
+#include "client/ui/content_i18n.h"
 #include "client/ui/draw.h"
 #include "client/ui/text.h"
 #include "client/ui/text_input.h"
@@ -272,9 +274,8 @@ void App::drawHud(Canvas& canvas, double time) {
         text(canvas, "Hel Casino: open chat and type /casino", window_.width() * 0.5, 190, style);
         break;
     }
-    // ALT swaps every abbreviated number on this surface for its exact value,
-    // and reveals the other players on the minimap.
-    const bool altHeld = window_.keyDown(Key::LeftAlt) || window_.keyDown(Key::RightAlt);
+    // altMode_ (ALT toggle) swaps abbreviated HUD numbers for exact values.
+    const bool altHeld = altMode_;
 
     // Invulnerability rides in the replicated state bits of the player's own
     // body rather than in SelfState, so the flag is read back off the entity.
@@ -351,6 +352,7 @@ void App::drawHud(Canvas& canvas, double time) {
     canvas.restore();
 
     drawMinimap(canvas);
+    drawOnlineRoster(canvas);
 
     const double bossBarsBottom = drawBossBars(canvas, altHeld);
     // Under the boss bars, which share the top of the screen with it and are
@@ -492,7 +494,8 @@ NearbyNpc App::nearbyNpc(Vec2 self) const {
 }
 
 double App::drawBossBars(Canvas& canvas, bool altHeld) {
-    // Super, unique and apex only. An ultra is a big mob, not a boss: it wears
+    if (!menus_.settings().render.healthBars) return 0.0;
+    // Injured supers, unique and apex only. An ultra is a big mob, not a boss: it wears
     // the ordinary bar under its body, which is also where its name is.
     // A pet is somebody's summon and a target dummy is a permanent DPS-test
     // fixture, so neither earns the screen-top bar whatever tier it wears.
@@ -506,11 +509,7 @@ double App::drawBossBars(Canvas& canvas, bool altHeld) {
     for (const auto& entry : net_.view().entities()) {
         const RemoteEntity& entity = entry.second;
         if (entity.kind != net::EntityKind::Mob) continue;
-        if (entity.rarity != Rarity::Super && entity.rarity != Rarity::Unique &&
-            entity.rarity != Rarity::Apex) {
-            continue;
-        }
-        if (prestige && entity.rarity == Rarity::Super) continue;
+        if (!needsTopBossBar(entity.rarity, entity.healthFraction, prestige)) continue;
         if ((entity.spawnFlags & net::SpawnIsPet) != 0) continue;
         const MobConfig& config = content().mob(entity.typeIndex);
         if (config.id == "target_dummy" || config.chainBody) continue;
@@ -528,24 +527,22 @@ double App::drawBossBars(Canvas& canvas, bool altHeld) {
         bosses.push_back(&entity);
     }
     if (bosses.empty()) return 0.0;
-    // The entity table is unordered, so two bosses on screen at once would
-    // otherwise trade rows from frame to frame.
-    std::sort(bosses.begin(), bosses.end(),
-              [](const RemoteEntity* a, const RemoteEntity* b) { return a->netId < b->netId; });
+    compactBossBars(bosses, prestige, window_.width(), window_.height());
+    if (bosses.empty()) return 0.0;
 
-    constexpr double kBarWidth = 400.0;
-    constexpr double kBarHeight = 34.0;
+    const double kBarWidth = std::min(340.0, std::max(120.0, window_.width() - 32.0));
+    constexpr double kBarHeight = 20.0;
     /// The plate the bar rides in: a charcoal pill standing this far out past
     /// it on every side, which is what the name and the tier overlap.
-    constexpr double kBarPad = 8.0;
-    constexpr double kNameSize = 33.0;
-    constexpr double kTierSize = 20.0;
+    constexpr double kBarPad = 4.0;
+    constexpr double kNameSize = 20.0;
+    constexpr double kTierSize = 14.0;
     /// The name's baseline sits just INSIDE the plate's top edge and the tier
     /// just below its bottom one, so both bite into the bar rather than
     /// floating clear of it.
-    constexpr double kNameDrop = 4.0;
-    constexpr double kTierDrop = 12.0;
-    constexpr double kRowSpacing = 88.0;
+    constexpr double kNameDrop = 2.0;
+    constexpr double kTierDrop = 9.0;
+    constexpr double kRowSpacing = 56.0;
     /// Where the fill's top edge lands on the first row. The block above it is
     /// the name, which is why this is not a plain margin.
     constexpr double kTopMargin = 108.0;
@@ -600,7 +597,7 @@ double App::drawBossBars(Canvas& canvas, bool altHeld) {
         text(canvas,
              altHeld ? formatNumber(std::round(health), true) + "/" +
                            formatNumber(maxHealth, true)
-                     : std::string(rarityLabel(boss.rarity)),
+                     : std::string(rarityTr(boss.rarity)),
              centreX, barY + kBarHeight + kTierDrop, tier);
     }
 

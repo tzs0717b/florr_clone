@@ -4,7 +4,7 @@
 // A squad is a conversation, not a record. It lives in memory, it is keyed by
 // the CONNECTION rather than by the account, and nothing about it survives a
 // restart -- exactly as src/server/squadManager.ts holds it. Split out of
-// GameServer because every rule in here ("only the leader may invite", "an
+// GameServer because every rule in here ("any member may invite", "an
 // invite lapses after thirty seconds", "the leader leaving promotes the next
 // member") is testable without a socket, and because two roads reach it: the
 // `/squad-*` chat commands, and the guild panel's own squad buttons.
@@ -94,8 +94,10 @@ public:
     /// Public squads with room left, in creation order.
     std::vector<const Squad*> publicSquads() const;
 
-    /// Invites `to` into `from`'s squad. Returns the refusal, or "" once the
-    /// invitation is pending.
+    /// Invites `to` into `from`'s squad. Any member may invite. A target who
+    /// is already in another squad is still inviteable (they switch on
+    /// accept); only someone already in *this* squad is refused. Returns the
+    /// refusal, or "" once the invitation is pending.
     std::string invite(SquadMemberId from, SquadMemberId to, std::int64_t nowMillis);
 
     /// The squad whose invitation is waiting on this member's answer, or
@@ -107,11 +109,6 @@ public:
     /// is long enough for either end to have respawned somewhere else.
     const Squad* pendingInviteSquad(SquadMemberId target, std::int64_t nowMillis) const;
 
-    /// Answers the one pending invitation. On success `squadIdOut` names the
-    /// squad joined.
-    std::string accept(SquadMemberId target, std::int64_t nowMillis, std::string& squadIdOut);
-    bool decline(SquadMemberId target);
-
     /// What leaving did, so the caller can say it out loud. `wasMember` false
     /// means there was nothing to leave.
     struct Departure {
@@ -122,6 +119,15 @@ public:
         /// Set when the leader left and the next member was promoted.
         SquadMemberId promoted;
     };
+
+    /// Answers the one pending invitation. On success `squadIdOut` names the
+    /// squad joined. If the target was in another squad, they leave it first
+    /// and `leftPrevious` (when non-null) describes that departure so the
+    /// caller can notify the old party.
+    std::string accept(SquadMemberId target, std::int64_t nowMillis, std::string& squadIdOut,
+                       Departure* leftPrevious = nullptr);
+    bool decline(SquadMemberId target);
+
     Departure leave(SquadMemberId who);
 
     /// Drops invitations that have lapsed. Called on the server's own clock

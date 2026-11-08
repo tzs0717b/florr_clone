@@ -1291,6 +1291,7 @@ PetalConfig parsePetal(Ctx& ctx, const std::string& id, const Json& src,
     // is legal -- gardn's mythic fang heals three times what it deals -- and
     // the bound only keeps a typo from reading as a full heal on every graze.
     p.lifesteal = ctx.range(src, "lifesteal", 0.0, 0.0, 100.0);
+    p.lightningRepeatChance = ctx.range(src, "lightningRepeatChance", 0.0, 0.0, 0.95);
     p.equipFlags = parseEquipFlags(ctx.text(src, "equipFlags"));
     // The lightning cutter carries a second bit so the client can tell the two
     // blades apart and paint the cyan one. It is derived from the id rather
@@ -1926,6 +1927,11 @@ PetalStats buildPetalStats(const PetalConfig& c, Rarity r) {
     s.critDamage = c.clawCritDamage * strength;
     // A fraction of the damage dealt, and that damage already climbs.
     s.lifesteal = c.lifesteal;
+    if (c.lightningRepeatChance > 0.0) {
+        const int rank = ladderIndex(tier);
+        s.lightningRepeatChance = std::min(0.95, c.lightningRepeatChance + 0.03 * rank);
+        s.maxLightningRepeats = 2 + rank / 3;
+    }
     s.reloadMillis = c.cooldownMillis;
     if (c.id == "yggdrasil") {
         // TypeScript overrides every row: it is always a 1/1 petal and its
@@ -1935,6 +1941,8 @@ PetalStats buildPetalStats(const PetalConfig& c, Rarity r) {
         s.reloadMillis = 512000.0 / std::pow(2.0, rarityIndex(tier));
     } else if (c.id == "lightning") {
         s.health = 10.0;
+    } else if (c.id == "splitter") {
+        s.reloadMillis *= std::pow(0.94, ladderIndex(tier));
     } else if (c.id == "bubble" || c.id == "magic_bubble") {
         // The magic bubble is a bubble with a mana price, and it pays the same
         // shortening reload: two petals that pop the same way must not read as

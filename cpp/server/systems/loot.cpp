@@ -286,7 +286,7 @@ Rarity LootSystem::chaffDropRarity(Rarity mobRarity) {
 Rarity LootSystem::finishDropRarity(Rarity baseRarity, Rarity mobRarity, Rng& rng) {
     Rarity base = baseRarity;
     const double upgrade =
-        clamp(dropUpgradeChance(base) * dropUpgradeMultiplier(mobRarity), 0.0, 1.0);
+        clamp(dropUpgradeChance(base) * dropUpgradeMultiplier(mobRarity) * 1.15, 0.0, 1.0);
     if (rng.chance(upgrade)) {
         base = upgradeRarity(base);
     } else if (rng.chance(dropDowngradeChance(base))) {
@@ -574,16 +574,13 @@ void LootSystem::awardDeaths(World& world, const ContentRegistry& content, Rng& 
         if (const Bounty* bounty = world.tryGet<Bounty>(corpse)) {
             for (const Bounty::Share& share : bounty->contributors) {
                 if (share.damage <= 0.0) continue;
-                // Damage is the whole test on the reference's side, where the
-                // tally holds nothing but player ids. So a contributor whose
-                // entity is GONE still burns one of the tier's slots: nobody is
-                // promoted into the gap, the next live player below the cut
-                // gets nothing, and a drop reserved for someone who left can
-                // never be completed and simply expires. Only a live entity
-                // that is not a flower is refused -- nothing in the game
-                // credits one, and the ranking is not the place to start.
-                if (world.isAlive(share.player) && !world.has<PlayerTag>(share.player)) continue;
-                ranked_.push_back(share);
+                // Refresh the body across death / title rejoin (connection key).
+                // A contributor whose session is GONE still burns one of the
+                // tier's slots: nobody is promoted into the gap. Only a live
+                // entity that is not a flower is refused.
+                const Bounty::Share live = refreshedShare(world, share);
+                if (world.isAlive(live.player) && !world.has<PlayerTag>(live.player)) continue;
+                ranked_.push_back(live);
             }
             // Stable: contributors are stored in first-hit order and the
             // reference's sort is specified stable, so on an exact damage tie
@@ -745,7 +742,7 @@ void LootSystem::rollTable(const std::vector<DropTables::Entry>& table, Rarity m
     // nothing at all.
     if (mobRarity == Rarity::Common) {
         for (const DropTables::Entry& entry : table) {
-            if (rng.chance(entry.probability)) selected_.push_back(&entry);
+            if (rng.chance(clamp(entry.probability * 1.15, 0.0, 1.0))) selected_.push_back(&entry);
         }
         return;
     }

@@ -29,6 +29,7 @@
 
 #include "svg.h"
 
+#include "client/ui/content_i18n.h"
 #include "client/ui/item_tile.h"
 #include "client/ui/menu_icons.h"
 #include "client/ui/menu_theme.h"
@@ -485,16 +486,23 @@ std::string trimmed(const std::string& s) {
 /// then the largest whole unit -- 5 h 23 m is "5 hours".
 std::string rotationCaption(std::int64_t secondsLeft) {
     const std::int64_t s = std::max<std::int64_t>(0, secondsLeft);
-    if (s == 0) return "Store will change immediately";
-    const auto unit = [](std::int64_t n, const char* one, const char* many) {
-        return std::to_string(n) + " " + (n == 1 ? one : many);
-    };
+    if (s == 0) return trEnZh("Store will change immediately", "商店即将刷新");
+    const bool zh = language() == Language::Zh;
     std::string time;
-    if (s >= 86400) time = unit(s / 86400, "day", "days");
-    else if (s >= 3600) time = unit(s / 3600, "hour", "hours");
-    else if (s >= 60) time = unit(s / 60, "minute", "minutes");
-    else time = unit(s, "second", "seconds");
-    return "Store will change in " + time;
+    if (s >= 86400) {
+        const auto n = s / 86400;
+        time = zh ? std::to_string(n) + " 天" : std::to_string(n) + (n == 1 ? " day" : " days");
+    } else if (s >= 3600) {
+        const auto n = s / 3600;
+        time = zh ? std::to_string(n) + " 小时" : std::to_string(n) + (n == 1 ? " hour" : " hours");
+    } else if (s >= 60) {
+        const auto n = s / 60;
+        time =
+            zh ? std::to_string(n) + " 分钟" : std::to_string(n) + (n == 1 ? " minute" : " minutes");
+    } else {
+        time = zh ? std::to_string(s) + " 秒" : std::to_string(s) + (s == 1 ? " second" : " seconds");
+    }
+    return zh ? ("商店将在 " + time + "后刷新") : ("Store will change in " + time);
 }
 
 /// The discount tag, centred on `corner` and tipped clockwise: a black rounded
@@ -584,7 +592,9 @@ bool ShopPanel::render(MenuContext& ctx) {
         if (!answer.ok) {
             state.modal = ShopState::Modal::Alert;
             state.lines = wrapMessage(
-                (answer.redeem ? "Code redemption failed: " : "Purchase failed: ") + answer.message,
+                (answer.redeem ? trEnZh("Code redemption failed: ", "兑换失败：")
+                               : trEnZh("Purchase failed: ", "购买失败：")) +
+                    answer.message,
                 kDialogLineSize, 260.0);
         } else if (answer.redeem) {
             // The field was already cleared when the code was sent; the stars
@@ -627,7 +637,8 @@ bool ShopPanel::render(MenuContext& ctx) {
     // --- window -------------------------------------------------------------
     drawFlorrPanel(canvas, panel, kWindowFill, kWindowRim);
 
-    text(canvas, "Shop", panel.x + panel.w * 0.5, panel.y + kTitleMiddle, shopText(kTitleSize));
+    text(canvas, menuTitle(MenuId::Shop), panel.x + panel.w * 0.5, panel.y + kTitleMiddle,
+         shopText(kTitleSize));
 
     const Rect closeRect{panel.right() - kCloseFromRight, panel.y + kCloseTop, kCloseSide,
                          kCloseSide};
@@ -639,7 +650,11 @@ bool ShopPanel::render(MenuContext& ctx) {
     setFill(canvas, kWindowRim);
     canvas.fillRect(static_cast<float>(panel.x), static_cast<float>(panel.y + kStripTop),
                     static_cast<float>(panel.w), static_cast<float>(kStripHeight));
-    static constexpr std::array<const char*, 3> kTabLabels{"Shop", "Challenge", "Bonus"};
+    const std::array<const char*, 3> kTabLabels{
+        trEnZh("Shop", "商店"),
+        trEnZh("Challenge", "挑战"),
+        trEnZh("Bonus", "奖励"),
+    };
     const double tabsWidth = 3.0 * kTabWidth + 2.0 * kTabGap;
     std::array<Rect, 3> tabRects{};
     for (int i = 0; i < 3; ++i) {
@@ -672,10 +687,13 @@ bool ShopPanel::render(MenuContext& ctx) {
 
         const double right = plate.x - 10.0;
         const double line = kFooterSize * kLineHeight;
-        text(canvas, "You gain stars by completing challenges, or by", right,
-             panel.y + kFooterTop + line * 0.5, shopText(kFooterSize, Align::Right));
-        text(canvas, "redeeming a code on the Bonus tab.", right,
-             panel.y + kFooterTop + line * 1.5, shopText(kFooterSize, Align::Right));
+        text(canvas,
+             trEnZh("You gain stars by completing challenges, or by",
+                    "通过完成挑战，或在「奖励」页"),
+             right, panel.y + kFooterTop + line * 0.5, shopText(kFooterSize, Align::Right));
+        text(canvas,
+             trEnZh("redeeming a code on the Bonus tab.", "兑换兑换码获得星星。"),
+             right, panel.y + kFooterTop + line * 1.5, shopText(kFooterSize, Align::Right));
     }
 
     // --- tab contents -------------------------------------------------------
@@ -693,8 +711,8 @@ bool ShopPanel::render(MenuContext& ctx) {
             state.offers = shopOffers(rotation);
         }
 
-        text(canvas, "Today's offers:", panel.x + panel.w * 0.5, panel.y + kHeadingMiddle,
-             shopText(kOffersHeadingSize));
+        text(canvas, trEnZh("Today's offers:", "今日特惠："), panel.x + panel.w * 0.5,
+             panel.y + kHeadingMiddle, shopText(kOffersHeadingSize));
         const std::int64_t remaining = shopRotationEnd(rotation) - shopClockNow();
         text(canvas, rotationCaption(remaining), panel.x + panel.w * 0.5, panel.y + kSubMiddle,
              shopText(kSubSize));
@@ -704,12 +722,14 @@ bool ShopPanel::render(MenuContext& ctx) {
         // belongs and left inert -- no hover, no press -- rather than made to
         // lie about what it did.
         {
-            const double width = measure("Lock", kLockSize) + textPad(kLockSize) + kLockExtra;
+            const char* lockLabel = trEnZh("Lock", "锁定");
+            const double width = measure(lockLabel, kLockSize) + textPad(kLockSize) + kLockExtra;
             const double right = panel.x + kGridLeft + 4.0 * kCellWidth + kPlateWidth;
             const Rect lock{right - width, panel.y + kHeaderTop + (kHeaderHeight - kLockHeight) * 0.5,
                             width, kLockHeight};
             drawFlorrButton(canvas, lock, kLockFace, kButtonBorder, kButtonRadius, false, false);
-            text(canvas, "Lock", lock.x + lock.w * 0.5, lock.y + lock.h * 0.5, shopText(kLockSize));
+            text(canvas, lockLabel, lock.x + lock.w * 0.5, lock.y + lock.h * 0.5,
+                 shopText(kLockSize));
         }
 
         std::array<Rect, kShopOfferCount> tiles{};
@@ -747,9 +767,11 @@ bool ShopPanel::render(MenuContext& ctx) {
                         kPriceSize);
         }
     } else if (tab_ == Tab::Bonus) {
-        text(canvas, "Redeem a Code", panel.x + panel.w * 0.5, panel.y + kHeadingMiddle,
-             shopText(kOffersHeadingSize));
-        text(canvas, "Codes are handed out on the Discord, and each pays its stars once.",
+        text(canvas, trEnZh("Redeem a Code", "兑换兑换码"), panel.x + panel.w * 0.5,
+             panel.y + kHeadingMiddle, shopText(kOffersHeadingSize));
+        text(canvas,
+             trEnZh("Codes are handed out on the Discord, and each pays its stars once.",
+                    "兑换码在 Discord 发放，每个只能兑换一次星星。"),
              panel.x + panel.w * 0.5, panel.y + kSubMiddle, shopText(kSubSize));
 
         // The code box, 20 under the header: the highlight colour under its
@@ -766,8 +788,8 @@ bool ShopPanel::render(MenuContext& ctx) {
         redeemButton = Rect{codeField.right() + 10.0, codeField.y, kRedeemWidth, kCodeFieldHeight};
 
         if (codeField.contains(under)) cursor = CursorShape::Text;
-        inputField(canvas, codeField, state.code, "Enter code...", state.field.focused,
-                   ctx.timeSeconds, &state.field);
+        inputField(canvas, codeField, state.code, trEnZh("Enter code...", "输入兑换码…"),
+                   state.field.focused, ctx.timeSeconds, &state.field);
 
         const bool usable = !trimmed(state.code).empty();
         const bool redeemHover = usable && redeemButton.contains(under);
@@ -780,12 +802,14 @@ bool ShopPanel::render(MenuContext& ctx) {
                         usable ? face : kButtonIdle, kButtonBorder, kButtonRadius, redeemHover,
                         usable && !modalUp && pressing(redeemButton),
                         usable ? std::nullopt : std::optional<std::uint32_t>(kButtonIdleRim));
-        text(canvas, "Redeem", redeemButton.x + redeemButton.w * 0.5,
+        text(canvas, trEnZh("Redeem", "兑换"), redeemButton.x + redeemButton.w * 0.5,
              redeemButton.y + redeemButton.h * 0.5, shopText(kTabSize));
     } else {
-        text(canvas, "Earn Stars by Defeating Mythic+ Mobs", panel.x + panel.w * 0.5,
-             panel.y + kHeadingMiddle, shopText(kOffersHeadingSize));
-        text(canvas, "Every kill at one of these tiers pays its stars to whoever helped.",
+        text(canvas, trEnZh("Earn Stars by Defeating Mythic+ Mobs", "击败神话及以上怪物获得星星"),
+             panel.x + panel.w * 0.5, panel.y + kHeadingMiddle, shopText(kOffersHeadingSize));
+        text(canvas,
+             trEnZh("Every kill at one of these tiers pays its stars to whoever helped.",
+                    "击杀这些稀有度的怪物时，参与者都会获得对应星星。"),
              panel.x + panel.w * 0.5, panel.y + kSubMiddle, shopText(kSubSize));
 
         // One card a tier on the store's own grid, in the row centred down the
@@ -804,7 +828,7 @@ bool ShopPanel::render(MenuContext& ctx) {
                               kTile - kButtonBorder, kTile - kButtonBorder};
             drawFlorrButton(canvas, swatch, rarityColor(challenge.tier), kButtonBorder, kButtonRadius, false,
                             false);
-            text(canvas, rarityLabel(challenge.tier), swatch.x + swatch.w * 0.5,
+            text(canvas, rarityTr(challenge.tier), swatch.x + swatch.w * 0.5,
                  swatch.y + swatch.h * 0.5, shopText(kTabSize));
 
             const Rect reward{plateAt.x + kPriceLeft, plateAt.y + kPriceTop, kPriceWidth,
@@ -825,12 +849,14 @@ bool ShopPanel::render(MenuContext& ctx) {
         if (alpha > 0) fillWindowRect(canvas, panel, kInk, alpha);
 
         const bool confirming = state.shown == ShopState::Modal::Confirm;
-        const std::string title = confirming ? "Confirm" : "Error";
+        const std::string title = confirming ? trEnZh("Confirm", "确认") : trEnZh("Error", "错误");
         const std::vector<std::string> lines =
-            confirming ? std::vector<std::string>{"Are you sure you want to buy this?",
-                                                  "Petal purchases are not refundable"}
+            confirming ? std::vector<std::string>{
+                             trEnZh("Are you sure you want to buy this?", "确定要购买吗？"),
+                             trEnZh("Petal purchases are not refundable", "花瓣购买后不可退款")}
                        : state.lines;
-        const char* cancelLabel = confirming ? "Cancel" : "OK";
+        const char* cancelLabel =
+            confirming ? trEnZh("Cancel", "取消") : trEnZh("OK", "确定");
         const double cancelWidth =
             measure(cancelLabel, kDialogCancelSize) + textPad(kDialogCancelSize) + kDialogCancelExtra;
         const double buttonsWidth =
@@ -931,7 +957,7 @@ bool ShopPanel::render(MenuContext& ctx) {
     const auto submitCode = [&] {
         const std::string code = trimmed(state.code);
         if (code.empty()) {
-            alert("Please enter a code");
+            alert(trEnZh("Please enter a code", "请输入兑换码"));
             return;
         }
         ctx.net.requestRedeemCode(code);

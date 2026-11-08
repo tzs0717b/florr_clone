@@ -843,6 +843,14 @@
     "drops": [
       {
         "type": "petal",
+        "itemType": "ruby",
+        "rarity": "common",
+        "probability": 0.06,
+        "minQuantity": 1,
+        "maxQuantity": 1
+      },
+      {
+        "type": "petal",
         "itemType": "icosahedron",
         "rarity": "common",
         "probability": 0.19,
@@ -959,6 +967,26 @@
       }
     ]
   },
+  "kernel_guardian": {
+    "drops": [
+      {
+        "type": "petal",
+        "itemType": "computer_chip",
+        "rarity": "common",
+        "probability": 0.7,
+        "minQuantity": 1,
+        "maxQuantity": 1
+      },
+      {
+        "type": "petal",
+        "itemType": "c++",
+        "rarity": "common",
+        "probability": 0.05,
+        "minQuantity": 1,
+        "maxQuantity": 1
+      }
+    ]
+  },
   "glitch": {
     "guaranteed": true,
     "drops": [
@@ -1028,6 +1056,22 @@
   "server": {
     "guaranteed": true,
     "drops": [
+      {
+        "type": "petal",
+        "itemType": "cutter",
+        "rarity": "common",
+        "probability": 0.08,
+        "minQuantity": 1,
+        "maxQuantity": 1
+      },
+      {
+        "type": "petal",
+        "itemType": "ruby",
+        "rarity": "common",
+        "probability": 0.1,
+        "minQuantity": 1,
+        "maxQuantity": 1
+      },
       {
         "type": "petal",
         "itemType": "capacitor",

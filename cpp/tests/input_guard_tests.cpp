@@ -297,6 +297,30 @@ TEST(a_teleport_moves_only_that_one_sample) {
     CHECK(hand.move(1005, 497));
 }
 
+TEST(trusted_fast_mouse_samples_never_redirect_the_gameplay_pointer) {
+    Hand hand;
+    CHECK(hand.reach(300, 300, 300));
+    hand.rest(500);
+    // A real coalesced report or a fast mouse movement can match this legacy
+    // heuristic. It must not turn the flower's aiming ray into a random ray.
+    CHECK(!hand.teleport(1000, 500));
+    CHECK(hand.physics.lastFlag() == PointerPhysics::Flag::Teleport);
+    CHECK(!shouldDisguisePointer(true, true));
+    hand.now += kFrame;
+    hand.sample(PointerSample::Kind::Press, 1000, 500);
+    CHECK(!shouldDisguisePointer(true, true));
+    hand.sample(PointerSample::Kind::Release, 1000, 500);
+    CHECK(!shouldDisguisePointer(true, true));
+}
+
+TEST(scripted_pointer_events_still_use_the_input_guard) {
+    Hand hand;
+    CHECK(!hand.sample(PointerSample::Kind::Move, 1000, 500, 8, true));
+    CHECK(hand.physics.lastFlag() == PointerPhysics::Flag::Scripted);
+    CHECK(shouldDisguisePointer(true, false));
+    CHECK(!shouldDisguisePointer(false, false));
+}
+
 TEST(a_teleport_then_click_is_not_believed) {
     Hand hand;
     CHECK(hand.reach(300, 300, 300));

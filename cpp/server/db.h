@@ -506,7 +506,7 @@ public:
     static constexpr const char* kAdminPasswordLocked = "Admin passwords cannot be changed.";
 
     /// The account rules, and the only copy of them: 3 to 16 of letters,
-    /// digits and underscore, starting with a letter; a password of 8 to 72
+    /// digits and underscore, starting with a letter or digit; a password of 8 to 72
     /// bytes with no control characters. Registration asks them before it
     /// spends anything (GameServer::handleRegister) and createUser asks again,
     /// so the two cannot drift into a name the first lets through and the

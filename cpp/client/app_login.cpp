@@ -427,7 +427,7 @@ void App::drawConnectionState(Canvas& canvas, double time) {
         // reconnection that is never coming is worse than the bare refusal.
         if (net_.reconnecting()) {
             style.size = 18.0;
-            text(canvas, "Reconnecting...", canvas.width() * 0.5, canvas.height() * 0.5 + 34.0,
+            text(canvas, ui::tr(ui::Msg::Reconnecting), canvas.width() * 0.5, canvas.height() * 0.5 + 34.0,
                  style);
         }
         return;
@@ -495,7 +495,7 @@ void App::drawSessionReplaced(Canvas& canvas, double time) {
     TextStyle hint;
     hint.size = 16.0;
     hint.align = Align::Centre;
-    text(canvas, "Only one tab can play an account at a time.", centreX, layout.hintY, hint);
+    text(canvas, ui::tr(ui::Msg::OnlyOneTab), centreX, layout.hintY, hint);
 
     ButtonStyle play;
     play.fill = kAccent;
@@ -533,7 +533,8 @@ void App::drawLogin(Canvas& canvas, double time) {
     TextStyle heading;
     heading.size = 28;
     heading.align = Align::Centre;
-    text(canvas, registering_ ? "Register" : "Login", centreX, layout.headingY, heading);
+    text(canvas, registering_ ? ui::tr(ui::Msg::Register) : ui::tr(ui::Msg::Login), centreX,
+         layout.headingY, heading);
 
     const int serverField = registering_ ? 3 : 2;
     // The four fields share one caret, so only the focused one is handed it:
@@ -570,23 +571,24 @@ void App::drawLogin(Canvas& canvas, double time) {
     quietStyle.fill = 0x6A1B9Au;
 
     if (registering_) {
-        button(canvas, layout.action, "Register", hovered == "register",
+        button(canvas, layout.action, tr(Msg::Register), hovered == "register",
                pressed == "register", actionStyle);
-        button(canvas, layout.secondary, "Register Offline", hovered == "offline",
-               pressed == "offline", quietStyle);
+        button(canvas, layout.secondary,
+               language() == Language::Zh ? "离线注册" : "Register Offline",
+               hovered == "offline", pressed == "offline", quietStyle);
 
         TextStyle link;
         link.size = 14.0;
         link.align = Align::Centre;
         link.strokeWidth = 0;
         link.fill = hovered == "showLogin" ? kPaper : 0xE0B0FFu;
-        text(canvas, "Already have an account? Login", centreX, layout.hintY, link);
+        text(canvas, tr(Msg::AlreadyHaveAccount), centreX, layout.hintY, link);
     } else {
-        button(canvas, layout.action, "Login", hovered == "login",
+        button(canvas, layout.action, tr(Msg::Login), hovered == "login",
                pressed == "login", actionStyle);
-        button(canvas, layout.secondary, "Register", hovered == "showRegister",
+        button(canvas, layout.secondary, tr(Msg::Register), hovered == "showRegister",
                pressed == "showRegister", actionStyle);
-        button(canvas, layout.guest, "Guest", hovered == "guest",
+        button(canvas, layout.guest, tr(Msg::Guest), hovered == "guest",
                pressed == "guest", quietStyle);
 
         TextStyle hint;
@@ -594,8 +596,7 @@ void App::drawLogin(Canvas& canvas, double time) {
         hint.align = Align::Centre;
         hint.strokeWidth = 0;
         hint.fill = 0xFF9800u;
-        text(canvas, "Pick a username and password later, in the Account menu", centreX,
-             layout.hintY, hint);
+        text(canvas, tr(Msg::PickUsernameLater), centreX, layout.hintY, hint);
     }
 
     // The reference raises its failures as browser dialogs, which this client

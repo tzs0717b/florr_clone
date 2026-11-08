@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <iterator>
 
+#include "client/ui/chat_i18n.h"
 #include "client/web/reload.h"
 #include "shared/game/absorb.h"
 #include "shared/core/text.h"
@@ -41,6 +42,7 @@ const char* clientMessageName(std::uint8_t id) {
         case net::ClientMessage::Respawn:             return "respawn";
         case net::ClientMessage::Ping:                return "ping";
         case net::ClientMessage::UpgradeSkill:        return "upgradeSkill";
+        case net::ClientMessage::DowngradeSkill:      return "downgradeSkill";
         case net::ClientMessage::ResetSkills:         return "resetSkills";
         case net::ClientMessage::BuyPetal:            return "buyPetal";
         case net::ClientMessage::RequestLeaderboard:  return "leaderboard";
@@ -125,6 +127,8 @@ const char* serverMessageName(std::uint8_t id) {
         case net::ServerMessage::ProfileDelta:        return "profileDelta";
         case net::ServerMessage::SkinVotes:           return "skinVotes";
         case net::ServerMessage::SkinOpinion:         return "skinOpinion";
+        case net::ServerMessage::OnlineRoster:        return "onlineRoster";
+        case net::ServerMessage::SquadInviteReceived: return "squadInvite";
     }
     return "unknown";
 }
@@ -301,6 +305,7 @@ void NetClient::forgetAccount() {
     // on the lobby's first frame before the server's fresh copy arrived.
     sessionToken_.clear();
     profile_ = Profile{};
+    selectedLoadoutPreset_ = -1;
     chat_.clear();
     chatBackfilled_ = false;
     whisperPartner_.clear();
@@ -320,8 +325,10 @@ void NetClient::forgetAccount() {
     notificationsPaging_ = false;
     ++notificationsRevision_;
     squad_ = SquadState{};
+    onlineRoster_.clear();
     guild_ = GuildState{};
     guildInvite_ = GuildInvite{};
+    squadInvite_ = SquadInvite{};
     craftOutcome_ = CraftOutcome{};
     oracleOutcome_ = OracleOutcome{};
     oracleReadyAtMillis_ = 0;
@@ -411,6 +418,7 @@ void NetClient::setLoadoutSlot(int slot, std::uint16_t petalIndex, Rarity rarity
     w.u16(petalIndex);
     w.u8(static_cast<std::uint8_t>(rarity));
     send(w);
+    if (autoSaveLoadout_) saveLoadoutPreset(selectedLoadoutPreset_);
 }
 
 void NetClient::swapLoadoutSlots(int a, int b) {
@@ -419,16 +427,19 @@ void NetClient::swapLoadoutSlots(int a, int b) {
     w.u8(static_cast<std::uint8_t>(a));
     w.u8(static_cast<std::uint8_t>(b));
     send(w);
+    if (autoSaveLoadout_) saveLoadoutPreset(selectedLoadoutPreset_);
 }
 
 void NetClient::swapLoadoutRows() {
     ByteWriter w;
     beginMessage(w, net::ClientMessage::SwapLoadoutRows);
     send(w);
+    if (autoSaveLoadout_) saveLoadoutPreset(selectedLoadoutPreset_);
 }
 
 void NetClient::saveLoadoutPreset(int preset) {
     if (preset < 0 || preset >= kLoadoutPresetCount) return;
+    selectedLoadoutPreset_ = preset;
     ByteWriter w;
     beginMessage(w, net::ClientMessage::SaveLoadoutPreset);
     w.u8(static_cast<std::uint8_t>(preset));
@@ -437,6 +448,7 @@ void NetClient::saveLoadoutPreset(int preset) {
 
 void NetClient::loadLoadoutPreset(int preset) {
     if (preset < 0 || preset >= kLoadoutPresetCount) return;
+    selectedLoadoutPreset_ = preset;
     ByteWriter w;
     beginMessage(w, net::ClientMessage::LoadLoadoutPreset);
     w.u8(static_cast<std::uint8_t>(preset));
@@ -529,6 +541,14 @@ const std::string* NetClient::titanHolder(std::uint16_t petalIndex) const {
 void NetClient::requestUpgradeSkill(SkillId skill, int tier) {
     ByteWriter w;
     beginMessage(w, net::ClientMessage::UpgradeSkill);
+    w.u8(static_cast<std::uint8_t>(skill));
+    w.u8(static_cast<std::uint8_t>(tier));
+    send(w);
+}
+
+void NetClient::requestDowngradeSkill(SkillId skill, int tier) {
+    ByteWriter w;
+    beginMessage(w, net::ClientMessage::DowngradeSkill);
     w.u8(static_cast<std::uint8_t>(skill));
     w.u8(static_cast<std::uint8_t>(tier));
     send(w);
@@ -1205,6 +1225,8 @@ void NetClient::onMessage(net::Connection& connection, ByteReader& reader) {
         case net::ServerMessage::AdminDb:       handleAdminDb(reader); break;
         case net::ServerMessage::AdminDashboard: handleAdminDashboard(reader); break;
         case net::ServerMessage::LeftWorld:     handleLeftWorld(); break;
+        case net::ServerMessage::OnlineRoster:  handleOnlineRoster(reader); break;
+        case net::ServerMessage::SquadInviteReceived: handleSquadInviteReceived(reader); break;
         default:
             // An unknown id means the server is newer than this build. The
             // frame is already fully buffered, so skipping it is safe and
@@ -1695,6 +1717,32 @@ void NetClient::handleNotifications(ByteReader& reader) {
     ++notificationsRevision_;
 }
 
+void NetClient::handleOnlineRoster(ByteReader& reader) {
+    const std::uint8_t count = reader.u8();
+    if (!reader.ok()) return;
+    std::vector<OnlineRosterEntry> next;
+    next.reserve(count);
+    for (std::uint8_t i = 0; i < count; ++i) {
+        OnlineRosterEntry row;
+        row.name = reader.str();
+        row.level = reader.u16();
+        row.guild = reader.str();
+        row.location = reader.str();
+        const std::uint8_t placed = reader.u8();
+        if (!reader.ok()) return;
+        if (placed != 0) {
+            row.placed = true;
+            row.realm = reader.u8();
+            row.x = reader.f32();
+            row.y = reader.f32();
+            if (!reader.ok()) return;
+        }
+        if (row.level < 1) row.level = 1;
+        next.push_back(std::move(row));
+    }
+    onlineRoster_ = std::move(next);
+}
+
 void NetClient::handleSquadUpdate(ByteReader& reader) {
     SquadState next;
     next.inSquad = reader.boolean();
@@ -1716,6 +1764,8 @@ void NetClient::handleSquadUpdate(ByteReader& reader) {
     }
     if (!reader.ok()) return;
     squad_ = std::move(next);
+    // Joining answers the outstanding invite the same way a guild update does.
+    if (squad_.inSquad) squadInvite_ = {};
 }
 
 void NetClient::handleGuildUpdate(ByteReader& reader) {
@@ -1752,6 +1802,16 @@ void NetClient::handleGuildInviteReceived(ByteReader& reader) {
     invite.waiting = true;
     invite.justArrived = true;
     guildInvite_ = std::move(invite);
+}
+
+void NetClient::handleSquadInviteReceived(ByteReader& reader) {
+    SquadInvite invite;
+    invite.fromUsername = reader.str();
+    invite.fromGuild = reader.u8() != 0;
+    if (!reader.ok()) return;
+    invite.waiting = true;
+    invite.justArrived = true;
+    squadInvite_ = std::move(invite);
 }
 
 void NetClient::installLocalCollision(Realm realm) {
@@ -1876,6 +1936,12 @@ void NetClient::handleMazeInfo(ByteReader& reader) {
 
 void NetClient::pushChat(net::ChatChannel channel, std::string author, std::string text,
                          std::uint32_t speakerNetId) {
+    // System / squad notices arrive in English; localize at display time so
+    // one broadcast still serves every client language.
+    if (channel == net::ChatChannel::System || channel == net::ChatChannel::Squad ||
+        author.empty() || author == "System") {
+        text = ui::localizeChatText(std::move(text));
+    }
     ChatLine line;
     line.channel = channel;
     line.author = std::move(author);
@@ -2100,12 +2166,11 @@ void NetClient::handleRevived(ByteReader& reader) {
     dead_ = false;
     killerName_.clear();
     revived = true;
-    // Composed here for the same reason the death card composes its own line:
-    // the server sends the fact and the name, the client says it. An empty
-    // name is a reviver whose body went away in the same tick, which still
-    // deserves a line -- the player is standing and wants to know why.
-    addSystemMessage(reviverName.empty() ? std::string("You were revived.")
-                                         : "You were revived by " + reviverName + ".");
+    // Named reviver = yggdrasil (or similar). Empty name = Continue / self
+    // respawn near the corpse -- no chat spam for that everyday click.
+    if (!reviverName.empty()) {
+        addSystemMessage("You were revived by " + reviverName + ".");
+    }
 }
 
 void NetClient::handlePong(ByteReader& reader, double arrivedMillis) {

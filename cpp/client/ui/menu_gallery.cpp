@@ -18,6 +18,7 @@
 #include <string>
 #include <vector>
 
+#include "client/ui/content_i18n.h"
 #include "client/ui/item_tile.h"
 #include "client/ui/menu_theme.h"
 #include "client/ui/menus.h"
@@ -52,7 +53,8 @@ constexpr double kScrollbarWidth = 12.0;
 constexpr double kThumbWidth = 8.0;
 
 /// Where the scrollable content starts, measured down from the card's top.
-constexpr double kContentTop = kPad + kTitleHeight + kTitleGap;
+constexpr double kSearchRowHeight = 38.0;
+constexpr double kContentTop = kPad + kTitleHeight + kTitleGap + kSearchRowHeight;
 
 /// The card is a fixed size however big the window is. It is a corner overlay
 /// now -- pinned under the top icon row rather than standing beside the icon
@@ -297,11 +299,6 @@ const std::vector<DropDef>& mobDropTable(std::uint16_t mobIndex) {
     return mobIndex < tables.size() ? tables[mobIndex] : kNone;
 }
 
-/// Crafting success at a tier, as a PERCENTAGE. The shared
-/// `craftSuccessChance` is the same ladder expressed as a fraction; the drop
-/// arithmetic below mixes it with literal 100s and needs this scale.
-double craftPercent(int tier) { return 64.0 / std::pow(2.0, tier); }
-
 /// The tier's column in the drop table, or -1 for a rarity items never take.
 int dropTier(Rarity r) {
     const int i = rarityIndex(r);
@@ -310,12 +307,12 @@ int dropTier(Rarity r) {
 
 double upgradePercent(Rarity r) {
     const int i = dropTier(r);
-    return (i < 0 || i >= kDropTiers - 1) ? 0.0 : craftPercent(i) / 3.0;
+    return (i < 0 || i >= kDropTiers - 1) ? 0.0 : dropUpgradeChance(r) * 100.0;
 }
 
 double downgradePercent(Rarity r) {
     const int i = dropTier(r);
-    return i <= 0 ? 0.0 : 100.0 / (1.0 + craftPercent(i - 1));
+    return i <= 0 ? 0.0 : dropDowngradeChance(r) * 100.0;
 }
 
 Rarity tierAbove(Rarity r) {
@@ -542,9 +539,8 @@ double GalleryPanel::preferredWidth() { return kCardWidth; }
 double GalleryPanel::preferredHeight() { return kCardHeight; }
 
 void GalleryPanel::reset() {
-    // Deliberately empty. The browser panel's scroll offset is a member that
-    // toggling never touches, so reopening the bestiary returns the player to
-    // the row they were reading rather than to the bees.
+    // Keep the query and scroll position when reopening, but release typing.
+    searchField_.blur();
 }
 
 bool GalleryPanel::render(MenuContext& ctx) {
@@ -563,11 +559,31 @@ bool GalleryPanel::render(MenuContext& ctx) {
 
     TextStyle title = galleryStyle(24.0, kPaper);
     title.align = Align::Centre;
-    text(canvas, "Mob Gallery", panel.x + panel.w * 0.5, panel.y + kPad + kTitleHeight * 0.5,
+    text(canvas, menuTitle(MenuId::Gallery), panel.x + panel.w * 0.5, panel.y + kPad + kTitleHeight * 0.5,
          title);
 
     const Rect closeRect = closeButtonRect(panel);
     panelClose(canvas, closeRect, closeRect.contains(mouse));
+
+    const Rect searchRect{panel.x + kPad, panel.y + kContentTop - kSearchRowHeight,
+                          panel.w - kPad * 2.0, 28.0};
+    inputField(canvas, searchRect, search_, trEnZh("Search mobs (English / 中文 / ID)",
+               "搜索怪物（中文 / English / ID）"), searchField_.focused, ctx.timeSeconds, &searchField_);
+    if (!(ctx.pressed() && closeRect.contains(mouse))) {
+        trackTextMouse(ctx.window, searchField_, searchRect,
+                       inputFieldRun(searchRect, search_, searchField_), search_, ctx.timeSeconds);
+    }
+    if (searchField_.focused) {
+        ctx.wantsText = true;
+        TextEditOptions typing;
+        typing.maxBytes = 128;
+        if (editText(ctx.window, search_, searchField_, ctx.timeSeconds, typing)) {
+            scroll_.offset = 0.0;
+            scrollDrag().active = false;
+        }
+        if (ctx.window.keyPressed(Key::Enter) || ctx.window.keyPressed(Key::Escape)) searchField_.blur();
+    }
+    if (searchRect.contains(mouse)) ctx.window.setCursorShape(CursorShape::Text);
 
     // --- layout ------------------------------------------------------------
     const double contentTop = panel.y + kContentTop;
@@ -581,6 +597,8 @@ bool GalleryPanel::render(MenuContext& ctx) {
     double y = kContentTop;
     // Declaration order, not index order: the registry's indices are sorted.
     for (const std::uint16_t mobIndex : mobRows().order) {
+        const MobConfig& mob = content().mob(mobIndex);
+        if (!mobMatchesSearch(mob.id, mob.name, search_)) continue;
         for (int tier = 0; tier < kTierColumns; ++tier) {
             const Rarity rarity = clampRarity(tier);
             Cell cell;
@@ -620,7 +638,7 @@ bool GalleryPanel::render(MenuContext& ctx) {
         // groove drags at the same rate the thumb moves.
         scroll_.offset = drag.startOffset +
                          (mouse.y - drag.startY) * (maxScroll / std::max(1.0, view.h));
-    } else if (overPanel) {
+    } else if (overPanel && mouse.y >= view.y) {
         // The wheel delta the browser reports is about 100px a notch, and its
         // sign is inverted against SDL's.
         scroll_.offset -= ctx.wheel() * 100.0;
@@ -726,6 +744,12 @@ bool GalleryPanel::render(MenuContext& ctx) {
     }
     canvas.restore();
 
+    if (cells.empty()) {
+        TextStyle empty = galleryStyle(16.0, kPaper);
+        empty.align = Align::Centre;
+        text(canvas, trEnZh("No matching mobs", "没有匹配的怪物"),
+             view.x + view.w * 0.5, view.y + 30.0, empty);
+    }
     if (maxScroll > 0) {
         galleryScrollbar(canvas, trackRect, contentHeight, scroll_.offset, maxScroll);
     }
@@ -739,10 +763,10 @@ bool GalleryPanel::render(MenuContext& ctx) {
         const MobStats stats = content().mobStats(cell.mobIndex, cell.rarity);
 
         std::vector<TooltipLine> lines;
-        lines.emplace_back(config.name, 20.0, kPaper, 0.0);
-        lines.emplace_back(rarityLabel(cell.rarity), 14.0, rarityColor(cell.rarity), 0.0);
+        lines.emplace_back(mobNameTr(config.id, config.name.c_str()), 20.0, kPaper, 0.0);
+        lines.emplace_back(rarityTr(cell.rarity), 14.0, rarityColor(cell.rarity), 0.0);
         if (!config.description.empty()) {
-            TooltipLine body{config.description, 12.0, kPaper, 10.0};
+            TooltipLine body{mobDescTr(config.id, config.description.c_str()), 12.0, kPaper, 10.0};
             body.maxWidth = 280.0;
             lines.push_back(std::move(body));
         }
@@ -754,11 +778,12 @@ bool GalleryPanel::render(MenuContext& ctx) {
             line.labelColor = labelColor;
             lines.push_back(std::move(line));
         };
-        stat("HP: " + abbreviateNumber(stats.health), statGap, kStatHealth);
-        stat("Damage: " + abbreviateNumber(stats.damage), 0.0, kStatDamage);
+        stat(std::string(tipHp()) + abbreviateNumber(stats.health), statGap, kStatHealth);
+        stat(std::string(tipDamage()) + abbreviateNumber(stats.damage), 0.0, kStatDamage);
         // Skipped when it is nothing, because a zero here reads as a mob with
         // a weakness rather than one whose author simply wrote no armour.
-        if (stats.armor != 0.0) stat("Armor: " + abbreviateNumber(stats.armor), 0.0, kStatArmor);
+        if (stats.armor != 0.0)
+            stat(std::string(tipArmor()) + abbreviateNumber(stats.armor), 0.0, kStatArmor);
         // Only the evasive few carry one, and it is the reason the fly takes
         // ten swings to kill -- the card is the one place that can say so.
         if (stats.evasion > 0.0) {
@@ -816,7 +841,7 @@ bool GalleryPanel::render(MenuContext& ctx) {
             double cy = box.y + kDropsGapY;
             TextStyle heading = galleryStyle(12.0, 0xFFD700u);
             heading.baseline = Baseline::Top;
-            text(canvas, "Drops:", box.x, cy, heading);
+            text(canvas, tr(Msg::Drops), box.x, cy, heading);
             cy += kDropsHeaderH;
 
             const double tableX = tx + (size.x - tableWidth) * 0.5;
@@ -825,7 +850,7 @@ bool GalleryPanel::render(MenuContext& ctx) {
             for (std::size_t i = 0; i < columns.size(); ++i) {
                 const Rarity rarity = clampRarity(columns[i]);
                 header.fill = rarityColor(rarity);
-                text(canvas, rarityLabel(rarity),
+                text(canvas, rarityTr(rarity),
                      tableX + static_cast<double>(i) * kDropCellW + kDropCellW * 0.5,
                      cy + kColHeaderH * 0.5, header);
             }

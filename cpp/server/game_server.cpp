@@ -1,5 +1,6 @@
 #include "server/game_server.h"
 #include "shared/game/signature_skin.h"
+#include "server/respawn_placement.h"
 
 #include "shared/core/process_stats.h"
 
@@ -961,6 +962,9 @@ void GameServer::tick(double nowMillis) {
     // Above the idle gate too: a member logging out of the title screen
     // changes every guildmate's roster whether or not anybody is playing.
     serviceGuildPresence(nowMillis);
+    // Public online list under the minimap (same session walk as the admin
+    // crown Players tab; fingerprint skips unchanged payloads).
+    serviceOnlineRoster(nowMillis);
     markTickPhase("sessions");
 
     // Housekeeping, ABOVE the idle gate: an account registered by somebody
@@ -1002,6 +1006,7 @@ void GameServer::tick(double nowMillis) {
     runSystems(nowMillis, smoothedDeltaSeconds_);
     persistBossClocks();
     serviceSacrificeSpawn(nowMillis);
+    pyramidMapPickups_.run(world_, worldMaps_, *terrain_, *spawning_, *loot_, content(), nowMillis);
     serviceSacrificeRituals(nowMillis);
 
     // BEFORE the reaper. A splitter gives one connection two bodies, and a
@@ -1534,6 +1539,7 @@ void GameServer::onMessage(net::Connection& connection, ByteReader& reader) {
         case net::ClientMessage::Absorb:
         case net::ClientMessage::BuyPetal:
         case net::ClientMessage::UpgradeSkill:
+        case net::ClientMessage::DowngradeSkill:
         case net::ClientMessage::ResetSkills:
         case net::ClientMessage::RedeemCode:
             if (!session->authenticated() || !spend(session->inventoryAllowance)) return;
@@ -1614,6 +1620,9 @@ void GameServer::onMessage(net::Connection& connection, ByteReader& reader) {
         case net::ClientMessage::Respawn:       handleRespawn(*session); break;
         case net::ClientMessage::Ping:          handlePing(connection, reader); break;
         case net::ClientMessage::UpgradeSkill:  handleUpgradeSkill(*session, connection, reader); break;
+        case net::ClientMessage::DowngradeSkill:
+            handleDowngradeSkill(*session, connection, reader);
+            break;
         case net::ClientMessage::ResetSkills:   handleResetSkills(*session, connection); break;
         case net::ClientMessage::BuyPetal:      handleBuyPetal(*session, connection, reader); break;
         case net::ClientMessage::RedeemCode:    handleRedeemCode(*session, connection, reader); break;
@@ -1971,15 +1980,7 @@ void GameServer::handleChangePassword(Session& session, net::Connection& connect
         return;
     }
 
-    // An admin account's password is never changed in game (setPassword says
-    // why, and refuses it again), so it is refused before a bcrypt verify or
-    // an attempt from the budget is spent finding that out. On the account's
-    // flag, not the session's: a banned admin is locked all the same.
-    if (const Account* own = std::as_const(database_).findUserById(session.userId);
-        own != nullptr && own->admin) {
-        sendChangePasswordResult(connection, false, "", Database::kAdminPasswordLocked);
-        return;
-    }
+    // AshFlor BJ: admins may change their password here (same budgets as anyone).
 
     // Held to the login budgets, both of them: this costs a bcrypt verify and
     // then a bcrypt hash, so it is strictly dearer than a login, and a wrong
@@ -2075,14 +2076,12 @@ void GameServer::handleSetUsername(Session& session, net::Connection& connection
         sendSetUsernameResult(connection, false, "", "Too many attempts. Wait a moment.");
         return;
     }
-    // A guest names itself once, and only a guest: the flag is the server's,
-    // set when it made the account and cleared by the rename below, so
-    // neither a registered account nor a guest that already chose can ask
-    // again, whatever its name looks like.
+    // Upstream: guests name themselves once. AshFlor BJ: database admins may
+    // rename too (session.admin is the persistent flag, not a temp grant).
     const Account* account = std::as_const(database_).findUserById(session.userId);
-    if (account == nullptr || !account->guest) {
+    if (account == nullptr || (!account->guest && !session.admin)) {
         sendSetUsernameResult(connection, false, "",
-                              "Only a guest account can set its username, and only once.");
+                              "Only a guest or admin account can set its username.");
         return;
     }
 
@@ -4254,8 +4253,9 @@ void GameServer::bankKills() {
         if (const Bounty* bounty = world_.tryGet<Bounty>(death.entity)) {
             for (const Bounty::Share& share : bounty->contributors) {
                 if (share.damage <= 0.0) continue;
-                if (world_.isAlive(share.player) && !world_.has<PlayerTag>(share.player)) continue;
-                ranked.push_back(share);
+                const Bounty::Share live = refreshedShare(world_, share);
+                if (world_.isAlive(live.player) && !world_.has<PlayerTag>(live.player)) continue;
+                ranked.push_back(live);
             }
         }
         // Stable, because the ledger is in first-hit order and the reference's
@@ -4437,6 +4437,62 @@ void GameServer::handleUpgradeSkill(Session& session, net::Connection& connectio
     }
 
     skills.set(id, tier);
+    database_.markDirty();
+    if (session.playing() && world_.isAlive(session.entity)) applyAccountToSession(session);
+    sendProfile(session, connection);
+}
+
+void GameServer::handleDowngradeSkill(Session& session, net::Connection& connection,
+                                      ByteReader& reader) {
+    const std::uint8_t rawSkill = reader.u8();
+    const int tier = reader.u8();
+    if (!reader.ok() || !session.authenticated()) return;
+    if (rawSkill >= kSkillCount) return;
+
+    const SkillId id = static_cast<SkillId>(rawSkill);
+    PlayerRecord& record = database_.progress(session.userId);
+    if (session.playing() && session.realm == Realm::Arena) {
+        sendNotice(connection, net::NoticeSeverity::Warning, "Talents are disabled in the arena.");
+        return;
+    }
+    const bool maze = session.playing() && session.realm == Realm::Maze;
+    SkillSet& skills = maze ? record.mazeSkills : record.skills;
+
+    // Must own this node: hold-to-refund only on a lit tile.
+    if (tier < 0 || tier >= skillTierCount(id) || skills.level(id) < tier) {
+        sendNotice(connection, net::NoticeSeverity::Warning, "That talent is not unlocked.");
+        return;
+    }
+
+    // Drop this tier and everything above on the branch; fork children whose
+    // parent no longer reaches their requirement go with it.
+    skillRefundTo(skills, id, tier - 1);
+
+    // Prestige leaving the tree while standing in a prestige biome: same exit
+    // as a full reset -- the biomes require the talent.
+    if (!maze && id == SkillId::Prestige && !skills.prestigeUnlocked()) {
+        session.prestige = false;
+        bool inPrestige = false;
+        if (session.playing()) {
+            for (const Entity body : bodiesOf(session)) {
+                if (body == NULL_ENTITY || !world_.isAlive(body)) continue;
+                const Transform* at = world_.tryGet<Transform>(body);
+                if (at != nullptr && worldMaps_.isPrestige(at->realm)) inPrestige = true;
+            }
+        }
+        if (inPrestige) {
+            leaveWorld(session);
+            ByteWriter w;
+            w.u8(static_cast<std::uint8_t>(net::ServerMessage::LeftWorld));
+            connection.send(w);
+            database_.markDirty();
+            sendProfile(session, connection);
+            sendNotice(connection, net::NoticeSeverity::Info,
+                       "Prestige refunded. Without it you are back on the title screen.");
+            return;
+        }
+    }
+
     database_.markDirty();
     if (session.playing() && world_.isAlive(session.entity)) applyAccountToSession(session);
     sendProfile(session, connection);
@@ -5611,6 +5667,105 @@ void GameServer::serviceGuildPresence(double nowMillis) {
     for (const std::string& guild : guildNames) broadcastGuildRoster(guilds[guild]);
 }
 
+void GameServer::serviceOnlineRoster(double nowMillis) {
+    // Same cadence spirit as guild presence: a second or two behind is fine,
+    // and rebuilding every tick for an unchanged list is free work on the
+    // hot path. Fingerprint short-circuits the broadcast.
+    constexpr double kIntervalMillis = 2000.0;
+    constexpr std::size_t kMaxRows = 64;
+    if (nowMillis < nextOnlineRosterMillis_) return;
+    nextOnlineRosterMillis_ = nowMillis + kIntervalMillis;
+
+    struct Row {
+        std::string name;
+        std::uint16_t level = 1;
+        std::string guild;
+        std::string location;
+        std::string sortKey;
+        bool placed = false;
+        std::uint8_t realm = 0;
+        float x = 0.f;
+        float y = 0.f;
+    };
+    std::vector<Row> rows;
+    rows.reserve(sessions_.size());
+    for (const auto& entry : sessions_) {
+        const Session& session = entry.second;
+        // Mirror the crown Players tab's universe: signed-in accounts. Title-
+        // screen sitters stay listed with an empty location (protocol).
+        if (!session.authenticated() || session.username.empty()) continue;
+        Row row;
+        row.name = session.displayName.empty() ? session.username : session.displayName;
+        row.sortKey = lowerCase(session.username);
+        row.guild = guildNameForUser(session.username);
+        row.location = guildLocation(session);
+        if (const PlayerRecord* progress = database_.findProgress(session.userId)) {
+            const int level = levelFromTotalXp(progress->totalXp).level;
+            row.level = static_cast<std::uint16_t>(std::clamp(level, 1, 65535));
+        }
+        // World position for the whole-map dots: AOI never carries far-away
+        // humans, so the roster is what paints them. Bots are not sessions.
+        if (session.playing() && world_.isAlive(session.entity)) {
+            if (const Transform* t = world_.tryGet<Transform>(session.entity)) {
+                row.placed = true;
+                row.realm = static_cast<std::uint8_t>(t->realm);
+                row.x = static_cast<float>(t->position.x);
+                row.y = static_cast<float>(t->position.y);
+            }
+        }
+        rows.push_back(std::move(row));
+    }
+    std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) {
+        if (a.sortKey != b.sortKey) return a.sortKey < b.sortKey;
+        return a.name < b.name;
+    });
+    if (rows.size() > kMaxRows) rows.resize(kMaxRows);
+
+    std::string fingerprint;
+    fingerprint.reserve(rows.size() * 48);
+    for (const Row& row : rows) {
+        fingerprint.append(row.name);
+        fingerprint.push_back('\n');
+        fingerprint.append(std::to_string(row.level));
+        fingerprint.push_back('\n');
+        fingerprint.append(row.guild);
+        fingerprint.push_back('\n');
+        fingerprint.append(row.location);
+        fingerprint.push_back('\n');
+        // Coarse so a player pacing in place does not force a resend every
+        // interval; ~32u steps still look right on a whole-map corner.
+        if (row.placed) {
+            fingerprint.append(std::to_string(row.realm));
+            fingerprint.push_back(':');
+            fingerprint.append(std::to_string(static_cast<int>(row.x) >> 5));
+            fingerprint.push_back(',');
+            fingerprint.append(std::to_string(static_cast<int>(row.y) >> 5));
+            fingerprint.push_back('\n');
+        } else {
+            fingerprint.append("-\n");
+        }
+    }
+    if (fingerprint == onlineRosterFingerprint_) return;
+    onlineRosterFingerprint_ = std::move(fingerprint);
+
+    ByteWriter w;
+    w.u8(static_cast<std::uint8_t>(net::ServerMessage::OnlineRoster));
+    w.u8(static_cast<std::uint8_t>(rows.size()));
+    for (const Row& row : rows) {
+        w.str(row.name);
+        w.u16(row.level);
+        w.str(row.guild);
+        w.str(row.location);
+        w.u8(row.placed ? 1 : 0);
+        if (row.placed) {
+            w.u8(row.realm);
+            w.f32(row.x);
+            w.f32(row.y);
+        }
+    }
+    broadcastToAuthenticated(w);
+}
+
 void GameServer::sendNoGuild(net::Connection& connection) {
     ByteWriter w;
     w.u8(static_cast<std::uint8_t>(net::ServerMessage::GuildUpdate));
@@ -6571,9 +6726,8 @@ void GameServer::handleGuildSquadAll(Session& session, net::Connection& connecti
         return;
     }
     Squad* squad = squadOrCreate(session, connection);
-    if (squad == nullptr || !(squad->leader == squadIdOf(session))) {
-        sendNotice(connection, net::NoticeSeverity::Warning,
-                   "Only your squad leader can invite guildmates into the squad.");
+    if (squad == nullptr) {
+        sendNotice(connection, net::NoticeSeverity::Warning, "Failed to create a squad.");
         return;
     }
 
@@ -6597,9 +6751,7 @@ void GameServer::handleGuildSquadAll(Session& session, net::Connection& connecti
         }
         ++invited;
         if (net::Connection* peer = listener_.find(target->connection)) {
-            sendSystem(*peer, "<span style=\"color: #4fc3f7;\">@" + session.username +
-                                  " (guild) invited you to their squad. Use /squad-accept or "
-                                  "/squad-decline.</span>");
+            sendSquadInvite(*peer, session.username, true);
         }
     }
     if (invited == 0) {
@@ -6661,9 +6813,7 @@ void GameServer::guildInviteToSquad(Session& session, net::Connection& connectio
     }
     sendNotice(connection, net::NoticeSeverity::Good, "Squad invite sent to " + target + ".");
     if (net::Connection* peer = listener_.find(peerSession->connection)) {
-        sendSystem(*peer, "<span style=\"color: #4fc3f7;\">@" + session.username +
-                              " (guild) invited you to their squad. Use /squad-accept or "
-                              "/squad-decline.</span>");
+        sendSquadInvite(*peer, session.username, true);
     }
 }
 
@@ -6673,36 +6823,46 @@ void GameServer::handleRespawn(Session& session) {
     // death means the grantee keeps it while they are looking at the death
     // card, which is where the reference leaves it too.
     revokeTempAdmin(session.connection);
-    // The map the client is still drawing. A corpse keeps its realm until it
-    // is replaced, so this is what the client last heard; a session with no
-    // body has told its client nothing since the join, and is restated
-    // regardless.
-    bool corpseRealmKnown = false;
+    // Continue stands near the corpse (ashflor-style in-place respawn), not
+    // back at the title-screen door. Capture the death site before the body
+    // is removed.
+    bool corpseKnown = false;
     Realm corpseRealm = Realm::Overworld;
+    Vec2 corpsePos{};
     if (session.playing() && world_.isAlive(session.entity)) {
         Health* health = world_.tryGet<Health>(session.entity);
         if (health && health->alive()) return;   // not actually dead
         if (const Transform* corpse = world_.tryGet<Transform>(session.entity)) {
-            corpseRealmKnown = true;
+            corpseKnown = true;
             corpseRealm = corpse->realm;
+            corpsePos = corpse->position;
         }
         despawnPlayer(session, false);
     }
-    const Entity reborn = spawnPlayer(session);
-    // A flower that died in a map it teleported into comes back where its
-    // spawn choice says -- usually another map. The snapshot stream restates
-    // the body but never the realm, so the client would keep drawing the map
-    // it died on under a body standing somewhere else: the same message a
-    // pad sends, for the same reason.
+    const Entity reborn = corpseKnown ? spawnPlayerNear(session, corpseRealm, corpsePos)
+                                      : spawnPlayer(session);
+    // The snapshot stream restates the body but never the realm. If somehow
+    // there was no corpse (session already cleared) and spawnPlayer picked a
+    // different map than the client was drawing, restate the realm the same
+    // way a pad does.
     if (reborn != NULL_ENTITY) {
         const Transform* transform = world_.tryGet<Transform>(reborn);
-        if (transform != nullptr && (!corpseRealmKnown || transform->realm != corpseRealm)) {
+        if (transform != nullptr && (!corpseKnown || transform->realm != corpseRealm)) {
             sendRealmChange(session, transform->position);
         }
     }
     // A fresh arena run has a fresh kit; the same restatement the join makes.
+    // Revived is what drops the client's death card -- without it Continue
+    // would leave the player standing with the card still up (same as a
+    // yggdrasil raise that forgot to announce).
     if (net::Connection* connection = listener_.find(session.connection)) {
         sendProfile(session, *connection);
+        if (reborn != NULL_ENTITY) {
+            ByteWriter w;
+            w.u8(static_cast<std::uint8_t>(net::ServerMessage::Revived));
+            w.str("");   // self-continue; client says "You were revived."
+            connection->send(w);
+        }
     }
 }
 
@@ -6823,6 +6983,29 @@ Entity GameServer::spawnPlayer(Session& session) {
         }
     }
 
+    return finishPlayerSpawn(session, realm, spawn);
+}
+
+Entity GameServer::spawnPlayerNear(Session& session, Realm realm, Vec2 around) {
+    if (session.entity != NULL_ENTITY || session.split()) {
+        std::printf("[SESSION] %s (connection %u) still held a body at spawn; removing it\n",
+                    session.username.c_str(), static_cast<unsigned>(session.connection));
+        despawnPlayer(session, true);
+        endSplit(session, clockMillis_, false);
+    }
+
+    const Entity entity = finishPlayerSpawn(session, realm, around);
+    if (entity != NULL_ENTITY) {
+        auto& transform = world_.get<Transform>(entity);
+        const double radius = world_.get<Body>(entity).radius;
+        transform.position = realm == Realm::Arena ? kArenaSpawn
+            : respawnPosition(*terrain_, rng_, realm, around, radius,
+                              realm == Realm::Maze ? kMazeCellSize * 0.5 : 200.0);
+    }
+    return entity;
+}
+
+Entity GameServer::finishPlayerSpawn(Session& session, Realm realm, Vec2 spawn) {
     // The realm is settled on the session BEFORE the account is applied, and
     // the arena's scratch record with it: applyAccountToEntity reads both.
     session.realm = realm;

@@ -19,6 +19,7 @@
 #include "client/ui/menu_theme.h"
 #include "client/ui/menus.h"
 #include "client/ui/text.h"
+#include "client/ui/content_i18n.h"
 #include "shared/game/config.h"
 
 namespace flix {
@@ -410,7 +411,8 @@ std::size_t SlotGrid::rows(const Profile& profile, bool withApex) {
 
 std::optional<SlotGrid::Pick> SlotGrid::render(
     MenuContext& ctx, const SlotCardLayout& layout, const PanelSkin& skin, bool withApex,
-    const std::function<SlotCell(std::uint16_t petalIndex, Rarity, std::uint32_t owned)>& look) {
+    const std::function<SlotCell(std::uint16_t petalIndex, Rarity, std::uint32_t owned)>& look,
+    const std::string& search) {
     Canvas& canvas = ctx.canvas;
     const Profile& profile = ctx.net.profile();
     const Vec2 mouse = ctx.mouse();
@@ -418,8 +420,12 @@ std::optional<SlotGrid::Pick> SlotGrid::render(
 
     // A stack only a column the grid does not have would show -- an apex one
     // on a card that stops at unique -- does not earn its type a row.
-    const std::vector<std::uint16_t> types = heldTypes(
+    std::vector<std::uint16_t> types = heldTypes(
         profile, [&](Rarity r) { return rarityIndex(r) < static_cast<int>(columns); });
+    types.erase(std::remove_if(types.begin(), types.end(), [&](std::uint16_t index) {
+        const auto& petal = content().petal(index);
+        return !petalMatchesSearch(petal.id, petal.name, search);
+    }), types.end());
 
     scrollList(ctx, scroll_, layout, contentHeightFor(types.size(), layout.listInsetY));
     const Rect clip = listClip(layout, columns);

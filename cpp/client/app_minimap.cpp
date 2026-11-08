@@ -25,6 +25,7 @@
 
 #include "client/minimap.h"
 #include "client/ui/draw.h"
+#include "client/ui/menu_widgets.h"
 #include "shared/game/constants.h"
 #include "shared/game/difficulty.h"
 #include "shared/game/terrain.h"
@@ -37,6 +38,14 @@ namespace {
 
 constexpr double kMinimapSize = 200.0;
 constexpr double kMinimapPadding = 10.0;
+/// Online list under the map: a bit wider than the map for name/guild/map,
+/// and tall so a busy server scrolls instead of crowding the HUD.
+constexpr double kRosterWidth = 240.0;
+constexpr double kRosterHeight = 320.0;
+constexpr double kRosterGap = 26.0;
+constexpr double kRosterHeader = 22.0;
+constexpr double kRosterRow = 16.0;
+constexpr double kRosterWheelStep = 28.0;
 /// The spawn bands' tints, one per rarity, drawn at 0.4 alpha while ALT is
 /// held. MINIMAP_SPAWN_COLORS (src/graphics/minimap.ts:11-22) is its own table
 /// and not the item palette: it ends violet and cyan where kRarityColors ends
@@ -356,12 +365,10 @@ void App::drawMinimap(Canvas& canvas) {
     // The corner belongs to whichever realm the flower is in: the maze draws
     // its own layout there, and the arena -- which has no map worth showing --
     // puts its scoreboard there instead, as the reference does.
-    // ALT does two things here: it reveals the other players' dots, and it
-    // picks the bake with the spawn bands under the walls.
-    const bool altHeld = window_.keyDown(Key::LeftAlt) || window_.keyDown(Key::RightAlt);
+    // altMode_ (ALT latch): spawn-band bake. Player dots + names always on.
     switch (net_.view().realm()) {
         case Realm::Maze:
-            drawMazeMinimap(canvas, altHeld);
+            drawMazeMinimap(canvas);
             return;
         case Realm::Arena:
             drawArenaLeaderboard(canvas);
@@ -369,10 +376,11 @@ void App::drawMinimap(Canvas& canvas) {
         case Realm::Overworld:
             break;
     }
-    // A map that hides its minimap (florr's `minimap: false`) gets nothing in
-    // the corner at all: the pyramid's maze is to be found, not read.
+    // A pyramid chart works from the bag as well as from either petal bar.
     if (const MapData* map = worldMaps_.forRealm(net_.view().realm())) {
-        if (!map->showsMinimap()) return;
+        const bool chart = map->templateId() == "pyramid" &&
+                           net_.profile().ownsPetal(content().petalIndex("pyramid_map"));
+        if (!map->showsMinimap() && !chart) return;
     }
 
     const double x = canvas.width() - kMinimapSize - kMinimapPadding;
@@ -387,7 +395,7 @@ void App::drawMinimap(Canvas& canvas) {
     const MinimapFit fit = minimapFit(net_.terrain().realmExtent(realm), kMinimapSize);
     const Vec2 me = net_.view().selfDrawnPosition();
 
-    if (const Canvas* baked = minimapStatic(altHeld)) {
+    if (const Canvas* baked = minimapStatic(altMode_)) {
         // Sized explicitly rather than left to drawCanvas's two-argument form:
         // that one takes the source's PIXEL size as its user-space extent,
         // which would draw a bake rasterised for a Retina display at twice
@@ -401,7 +409,8 @@ void App::drawMinimap(Canvas& canvas) {
     canvas.rect(static_cast<float>(x), static_cast<float>(y), static_cast<float>(kMinimapSize),
                 static_cast<float>(kMinimapSize));
     canvas.clip();
-    const auto dot = [&](Vec2 world, double radius, std::uint32_t fill, bool outlined) {
+    const auto dot = [&](Vec2 world, double radius, std::uint32_t fill, bool outlined,
+                         const std::string* label) {
         const Vec2 box = fit.toBox(world);
         const double dx = x + box.x;
         const double dy = y + box.y;
@@ -412,26 +421,64 @@ void App::drawMinimap(Canvas& canvas) {
         setFill(canvas, fill);
         canvas.fillCircle(static_cast<float>(dx), static_cast<float>(dy),
                           static_cast<float>(radius));
-        if (!outlined) return;
-        setStroke(canvas, kInk);
-        canvas.setLineWidth(1.0f);
-        canvas.strokeCircle(static_cast<float>(dx), static_cast<float>(dy),
-                            static_cast<float>(radius));
+        if (outlined) {
+            setStroke(canvas, kInk);
+            canvas.setLineWidth(1.0f);
+            canvas.strokeCircle(static_cast<float>(dx), static_cast<float>(dy),
+                                static_cast<float>(radius));
+        }
+        if (label == nullptr || label->empty()) return;
+        TextStyle name;
+        name.size = 9.0;
+        name.fill = kPaper;
+        name.stroke = kInk;
+        name.align = Align::Centre;
+        name.baseline = Baseline::Bottom;
+        text(canvas, *label, dx, dy - radius - 2.0, name);
     };
-    // Squadmates are on the map whether or not ALT is held -- that is the whole
-    // point of a party -- and in pink with an outline, so they stand out from
-    // the crowd ALT brings up rather than joining it.
+    // AOI stream first (fresh); then OnlineRoster fills in far-away humans the
+    // viewport never carries. Bots only exist in AOI -- they are not sessions.
     const SquadState& squad = net_.squad();
+    const auto squadByName = [&](const std::string& name) {
+        if (!squad.inSquad || name.empty()) return false;
+        for (const auto& m : squad.members) {
+            if (m.name == name || m.account == name) return true;
+        }
+        return false;
+    };
+    std::vector<std::string> painted;
+    painted.reserve(16);
     for (const auto& entry : net_.view().entities()) {
         const RemoteEntity& entity = entry.second;
         if (entity.kind != net::EntityKind::Player || entity.isSelf()) continue;
         const bool squadmate = squad.contains(entry.first);
-        if (!squadmate && !altHeld) continue;
-        if (squadmate) dot(entity.position, 4.0, 0xFF69B4u, true);
-        else dot(entity.position, 4.0, kInk, false);
+        const std::string label =
+            entity.name.empty() ? std::string(tr(Msg::Flower)) : entity.name;
+        if (squadmate) dot(entity.position, 4.0, 0xFF69B4u, true, &label);
+        else dot(entity.position, 4.0, kInk, false, &label);
+        painted.push_back(label);
+    }
+    const std::string selfName =
+        net_.profile().username.empty() ? std::string(tr(Msg::You)) : net_.profile().username;
+    const std::string& selfAccount = net_.profile().username;
+    const std::uint8_t myRealm = static_cast<std::uint8_t>(realm);
+    for (const auto& row : net_.onlineRoster()) {
+        if (!row.placed || row.realm != myRealm) continue;
+        if (row.name == selfName || (!selfAccount.empty() && row.name == selfAccount)) continue;
+        bool already = false;
+        for (const std::string& n : painted) {
+            if (n == row.name) {
+                already = true;
+                break;
+            }
+        }
+        if (already) continue;
+        const Vec2 at{row.x, row.y};
+        if (squadByName(row.name)) dot(at, 4.0, 0xFF69B4u, true, &row.name);
+        else dot(at, 4.0, kInk, false, &row.name);
     }
     // Self last, so the blue dot is never hidden under someone standing on it.
-    dot(me, 3.0, 0x0000FFu, true);
+    dot(me, 3.0, 0x0000FFu, true, &selfName);
 
     // The camera's own rectangle, inside the clip, with hitboxes on. The
     // reference strokes it from cameraX/cameraY, which are the world-space TOP
@@ -484,6 +531,94 @@ void App::drawMinimap(Canvas& canvas) {
         const std::string captionText =
             named->displayName().empty() ? named->id() : named->displayName();
         text(canvas, captionText, x + kMinimapSize * 0.5, y + kMinimapSize + 18.0, caption);
+    }
+}
+
+bool App::scrollOnlineRoster() {
+    if (window_.wheelDelta() == 0) return false;
+    if (onlineRosterBox_.w <= 0) return false;
+    const Vec2 mouse{window_.mouseX(), window_.mouseY()};
+    if (!onlineRosterBox_.contains(mouse)) return false;
+    onlineRosterScroll_ =
+        std::max(0.0, onlineRosterScroll_ + window_.wheelDelta() * kRosterWheelStep);
+    return true;
+}
+
+void App::drawOnlineRoster(Canvas& canvas) {
+    onlineRosterBox_ = {};
+    const auto& roster = net_.onlineRoster();
+    // Nothing to show until the first push; keeps the corner clean on connect.
+    if (roster.empty() && !net_.haveSession()) return;
+
+    const double x = canvas.width() - kRosterWidth - kMinimapPadding;
+    const double y = kMinimapPadding + kMinimapSize + kRosterGap;
+    // Leave room above the bottom HUD / chat; never eat the whole screen.
+    const double maxH = std::max(120.0, canvas.height() - y - 140.0);
+    const double boxH = std::min(kRosterHeight, maxH);
+    onlineRosterBox_ = {x, y, kRosterWidth, boxH};
+
+    canvas.save();
+    setFill(canvas, 0x141419u, kOverlayPlateAlpha);
+    canvas.beginPath();
+    canvas.roundRect(static_cast<float>(x), static_cast<float>(y), static_cast<float>(kRosterWidth),
+                     static_cast<float>(boxH), 6.0f);
+    canvas.fill();
+    setStroke(canvas, 0xFFD700u);
+    canvas.setLineWidth(1.5f);
+    canvas.beginPath();
+    canvas.roundRect(static_cast<float>(x), static_cast<float>(y), static_cast<float>(kRosterWidth),
+                     static_cast<float>(boxH), 6.0f);
+    canvas.stroke();
+
+    TextStyle header;
+    header.size = 12.0;
+    header.fill = kPaper;
+    header.align = Align::Left;
+    header.baseline = Baseline::Middle;
+    const std::string title =
+        std::string(tr(Msg::Online)) + " " + std::to_string(roster.size());
+    text(canvas, title, x + 8.0, y + kRosterHeader * 0.5, header);
+
+    const double listTop = y + kRosterHeader;
+    const double listH = std::max(0.0, boxH - kRosterHeader - 4.0);
+    const double contentH = static_cast<double>(roster.size()) * kRosterRow;
+    const double maxScroll = std::max(0.0, contentH - listH);
+    if (onlineRosterScroll_ > maxScroll) onlineRosterScroll_ = maxScroll;
+
+    canvas.beginPath();
+    canvas.rect(static_cast<float>(x + 1.0), static_cast<float>(listTop),
+                static_cast<float>(kRosterWidth - 2.0), static_cast<float>(listH));
+    canvas.clip();
+
+    TextStyle rowStyle;
+    rowStyle.size = 10.0;
+    rowStyle.fill = 0xCFC3B0u;
+    rowStyle.align = Align::Left;
+    rowStyle.baseline = Baseline::Middle;
+
+    // Only paint rows that intersect the clip — cheap with dozens of players.
+    const int first = static_cast<int>(onlineRosterScroll_ / kRosterRow);
+    const int last = static_cast<int>(
+        std::ceil((onlineRosterScroll_ + listH) / kRosterRow));
+    const int n = static_cast<int>(roster.size());
+    for (int i = std::max(0, first); i < std::min(n, last); ++i) {
+        const auto& entry = roster[static_cast<std::size_t>(i)];
+        const double cy =
+            listTop + (static_cast<double>(i) + 0.5) * kRosterRow - onlineRosterScroll_;
+        std::string line = entry.name + "  Lv" + std::to_string(entry.level);
+        if (!entry.guild.empty()) line += "  [" + entry.guild + "]";
+        if (!entry.location.empty()) line += "  " + entry.location;
+        else {
+            line += "  ";
+            line += tr(Msg::LobbyParen);
+        }
+        text(canvas, ellipsize(line, rowStyle.size, kRosterWidth - 16.0), x + 8.0, cy, rowStyle);
+    }
+    canvas.restore();
+
+    if (contentH > listH + 0.5) {
+        scrollbar(canvas, Rect{x, listTop, kRosterWidth - 2.0, listH}, contentH,
+                  onlineRosterScroll_, 0xFFD700u, 4.0);
     }
 }
 
@@ -562,7 +697,7 @@ const Canvas* App::mazeMinimapStatic() {
     return mazeMinimapStatic_.get();
 }
 
-void App::drawMazeMinimap(Canvas& canvas, bool altHeld) {
+void App::drawMazeMinimap(Canvas& canvas) {
     const Maze& maze = activeMaze();
     const double x = canvas.width() - kMinimapSize - kMinimapPadding;
     const double y = kMinimapPadding;
@@ -580,30 +715,68 @@ void App::drawMazeMinimap(Canvas& canvas, bool altHeld) {
     canvas.rect(static_cast<float>(x), static_cast<float>(y), static_cast<float>(kMinimapSize),
                 static_cast<float>(kMinimapSize));
     canvas.clip();
-    // Player dots under the same rules as the world map: self always,
-    // squadmates always, everyone else only while ALT is held.
-    const auto dot = [&](Vec2 world, double radius, std::uint32_t fill, bool outlined) {
+    // AOI + OnlineRoster (same realm), labeled — roster covers far humans.
+    const auto dot = [&](Vec2 world, double radius, std::uint32_t fill, bool outlined,
+                         const std::string* label) {
         const double dx = x + (world.x - kMazeOriginX) * scale;
         const double dy = y + (world.y - kMazeOriginY) * scale;
         setFill(canvas, fill);
         canvas.fillCircle(static_cast<float>(dx), static_cast<float>(dy),
                           static_cast<float>(radius));
-        if (!outlined) return;
-        setStroke(canvas, kInk);
-        canvas.setLineWidth(1.0f);
-        canvas.strokeCircle(static_cast<float>(dx), static_cast<float>(dy),
-                            static_cast<float>(radius));
+        if (outlined) {
+            setStroke(canvas, kInk);
+            canvas.setLineWidth(1.0f);
+            canvas.strokeCircle(static_cast<float>(dx), static_cast<float>(dy),
+                                static_cast<float>(radius));
+        }
+        if (label == nullptr || label->empty()) return;
+        TextStyle name;
+        name.size = 9.0;
+        name.fill = kPaper;
+        name.stroke = kInk;
+        name.align = Align::Centre;
+        name.baseline = Baseline::Bottom;
+        text(canvas, *label, dx, dy - radius - 2.0, name);
     };
     const SquadState& squad = net_.squad();
+    const auto squadByName = [&](const std::string& name) {
+        if (!squad.inSquad || name.empty()) return false;
+        for (const auto& m : squad.members) {
+            if (m.name == name || m.account == name) return true;
+        }
+        return false;
+    };
+    std::vector<std::string> painted;
     for (const auto& entry : net_.view().entities()) {
         const RemoteEntity& entity = entry.second;
         if (entity.kind != net::EntityKind::Player || entity.isSelf()) continue;
         const bool squadmate = squad.contains(entry.first);
-        if (!squadmate && !altHeld) continue;
-        if (squadmate) dot(entity.position, 4.0, 0xFF69B4u, true);
-        else dot(entity.position, 4.0, kInk, false);
+        const std::string label =
+            entity.name.empty() ? std::string(tr(Msg::Flower)) : entity.name;
+        if (squadmate) dot(entity.position, 4.0, 0xFF69B4u, true, &label);
+        else dot(entity.position, 4.0, kInk, false, &label);
+        painted.push_back(label);
     }
-    dot(net_.view().selfDrawnPosition(), 3.0, 0x0000FFu, true);
+    const std::string selfName =
+        net_.profile().username.empty() ? std::string(tr(Msg::You)) : net_.profile().username;
+    const std::string& selfAccount = net_.profile().username;
+    constexpr std::uint8_t kMazeRealm = static_cast<std::uint8_t>(Realm::Maze);
+    for (const auto& row : net_.onlineRoster()) {
+        if (!row.placed || row.realm != kMazeRealm) continue;
+        if (row.name == selfName || (!selfAccount.empty() && row.name == selfAccount)) continue;
+        bool already = false;
+        for (const std::string& n : painted) {
+            if (n == row.name) {
+                already = true;
+                break;
+            }
+        }
+        if (already) continue;
+        const Vec2 at{row.x, row.y};
+        if (squadByName(row.name)) dot(at, 4.0, 0xFF69B4u, true, &row.name);
+        else dot(at, 4.0, kInk, false, &row.name);
+    }
+    dot(net_.view().selfDrawnPosition(), 3.0, 0x0000FFu, true, &selfName);
     canvas.restore();
 
     canvas.save();
@@ -635,7 +808,7 @@ void App::drawArenaLeaderboard(Canvas& canvas) {
     for (const auto& entry : net_.view().entities()) {
         const RemoteEntity& entity = entry.second;
         if (entity.kind != net::EntityKind::Player) continue;
-        rows.push_back({entity.name.empty() ? std::string("Unnamed") : entity.name,
+        rows.push_back({entity.name.empty() ? std::string(tr(Msg::Unnamed)) : entity.name,
                         static_cast<double>(entity.arenaScore)});
     }
     if (rows.empty()) return;
@@ -693,7 +866,11 @@ void App::drawArenaLeaderboard(Canvas& canvas) {
     header.stroke = 0x222222u;
     header.align = Align::Centre;
     header.baseline = Baseline::Middle;
-    text(canvas, rows.size() == 1 ? std::string("1 Flower") : std::to_string(rows.size()) + " Flowers",
+    text(canvas,
+         language() == Language::Zh
+             ? (std::to_string(rows.size()) + " 朵花")
+             : (rows.size() == 1 ? std::string("1 Flower")
+                                 : std::to_string(rows.size()) + " Flowers"),
          headerX + headerW * 0.5, headerY + kHeaderH * 0.5, header);
 
     const double rowsX = x + (panelW - kRowW) * 0.5;

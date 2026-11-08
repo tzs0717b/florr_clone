@@ -235,6 +235,7 @@ bool App::start(const AppConfig& config, std::string& errorOut) {
     // A missing settings file is a first run, not a failure: the defaults in
     // ClientSettings are already the shipped configuration.
     menus_.settings().load(settingsPath());
+    ui::setLanguage(menus_.settings().language);
     // Where the asset browser starts, and which file it reloads the settings
     // from when it saves one.
     menus_.setFilePaths(config.dataDir, settingsPath());
@@ -675,7 +676,7 @@ void App::frame(double dt) {
     // to drop what it was holding, and neither of those runs updatePlaying at
     // all -- a button left held would still be firing on the next game.
     if (touchControlsVisible()) {
-        mobile_.update(window_.touchEvents());
+        mobile_.update(window_.touchEvents(), timeSeconds_);
         mobile_.releaseLost(window_.touches());
     } else {
         mobile_.reset();
@@ -787,9 +788,15 @@ void App::frame(double dt) {
     // The renderer's switches live in the settings menu, so they are copied
     // across every frame rather than the menu reaching into the renderer.
     renderer_.options = menus_.settings().render;
-    // Not a setting: held, the way the HUD and the minimap read it. The copy
-    // above resets it every frame, so it has to be put back after it.
-    renderer_.options.rarityGlow = window_.keyDown(Key::LeftAlt) || window_.keyDown(Key::RightAlt);
+    // ALT is a latch (default off): exact HUD numbers, spawn bands, rarity
+    // glow. Skip while typing so chat / fields keep Alt as a modifier.
+    if (!chatOpen_ && !menus_.wantsText() &&
+        (window_.keyPressed(Key::LeftAlt) || window_.keyPressed(Key::RightAlt))) {
+        altMode_ = !altMode_;
+    }
+    // The copy above resets it every frame, so it has to be put back after it.
+    renderer_.options.rarityGlow = altMode_;
+    menus_.setAltMode(altMode_);
     camera_.userZoom = menus_.settings().zoom;
     // The petals' share of the zoom, read off the account's own loadout. It is
     // not on the wire, as in the browser: the server works the same figure
@@ -866,6 +873,8 @@ void App::frame(double dt) {
         camera_.snapTo(selfDrawn);
         prepareDarkness(selfDrawn);
         renderer_.draw(canvas, net_.view(), camera_, selfDrawn, timeSeconds_);
+        // Aim assist over the world (and under darkness / HUD), like AshFlor.
+        drawMovementHelper(canvas);
         // A dark map's dark, over the world only, like the wash below.
         drawDarkness(canvas);
         // Dead: the WORLD goes dim, and only the world. The reference's wash
@@ -1053,11 +1062,15 @@ void App::publishKeyboardRegions() {
                                      static_cast<float>(box.w), static_cast<float>(box.h)});
     }
     window_.setSoftKeyboardRegions(std::move(regions));
+    // Keep the hidden <input> focused while something owns the caret -- chat
+    // opened by Enter never taps a field, so without ensureSoftKeyboard the
+    // canvas holds focus and IME language switches mostly fail.
     // And take it away when nothing holds the caret any more. The page's own
     // handler only dismisses on a touch that lands outside every field, which
     // a line closed by Enter -- or by the panel it lived in shutting -- never
     // gets, and the keyboard would stay up over a game nobody is typing into.
-    if (!keyboardCaptured()) window_.dismissSoftKeyboard();
+    if (keyboardCaptured()) window_.ensureSoftKeyboard();
+    else window_.dismissSoftKeyboard();
 
     // The lists a finger can drag, for the same reason the fields are handed
     // over here: the window decides what a touch is as it lands.

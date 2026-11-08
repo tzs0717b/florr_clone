@@ -280,6 +280,7 @@ private:
         Vec2 position;
         double radius = 0;
         Realm realm = Realm::Overworld;
+        bool cutterPassable = false;
     };
 
     /// One loose petal, flattened out of the ECS for the passes that shove it.
@@ -353,10 +354,11 @@ private:
     /// Puts a flower back outside every NPC body it has walked into. NPCs are
     /// solid to flowers, and they do not give way: the flower is moved, the
     /// NPC stays on its mark.
-    void pushOutOfNpcs(const Terrain& terrain, Transform& transform, double radius, bool phase = false) const;
+    void pushOutOfNpcs(const Terrain& terrain, Transform& transform, double radius,
+                       bool passThroughMobs, bool phase = false) const;
     /// Rebuilds npcDiscs_. NPCs do not move between the two movement phases
     /// of one tick, but either phase may be the first to run in a test.
-    void collectNpcDiscs();
+    void collectNpcDiscs(World& world);
     /// Rebuilds looseDiscs_ from the live transforms, and writes it back.
     void collectLooseDiscs();
     void storeLooseDiscs(World& world) const;

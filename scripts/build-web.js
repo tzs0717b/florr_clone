@@ -60,6 +60,9 @@
  *                 rebuilds the other tree, and it stages the same files under
  *                 the same names: whichever was staged last is what dist/ holds.
  *                 There is no Skia offline-asmjs page.
+ *   FLIX_DEFAULT_NEW_ACCOUNTS_ADMIN  1 | 0 (default 0). BJ akuah only: new
+ *                 accounts are admin. Builds into cpp/build-web-admin so the
+ *                 no-admin HK .161 tree is never reused across the switch.
  *
  * `npm run build` and `npm start` both pin FLIX_BUILD=release, so what they
  * produce does not depend on what happens to be in the environment; `npm run
@@ -81,7 +84,14 @@ if (renderer !== 'canvas2d' && renderer !== 'skia') {
     console.error(`\nbuild-web: FLIX_RENDERER must be canvas2d or skia, not '${renderer}'\n`);
     process.exit(1);
 }
-const BUILD_DIR = path.join(CPP_DIR, renderer === 'skia' ? 'build-web-skia' : 'build-web');
+const defaultNewAccountsAdmin =
+    process.env.FLIX_DEFAULT_NEW_ACCOUNTS_ADMIN === '1' ||
+    process.env.FLIX_DEFAULT_NEW_ACCOUNTS_ADMIN === 'ON' ||
+    process.env.FLIX_DEFAULT_NEW_ACCOUNTS_ADMIN === 'on';
+const BUILD_DIR = path.join(
+    CPP_DIR,
+    renderer === 'skia' ? 'build-web-skia'
+        : (defaultNewAccountsAdmin ? 'build-web-admin' : 'build-web'));
 const DIST = path.join(ROOT, 'dist');
 
 // cmake target -> the files it emits, as [name in cpp/build-web, name in dist].
@@ -200,7 +210,8 @@ if (!copyOnly) {
     // flavour switch. emcmake is what puts the emscripten toolchain file on
     // the command line.
     run('emcmake', ['cmake', '-S', CPP_DIR, '-B', BUILD_DIR, `-DFLIX_BUILD=${flavour}`,
-                    `-DFLIX_RENDERER=${renderer}`]);
+                    `-DFLIX_RENDERER=${renderer}`,
+                    `-DFLIX_DEFAULT_NEW_ACCOUNTS_ADMIN=${defaultNewAccountsAdmin ? 'ON' : 'OFF'}`]);
     const jobs = String(os.cpus().length);
     for (const name of selected) {
         run('cmake', ['--build', BUILD_DIR, '--target', TARGETS[name].cmakeTarget, '-j', jobs]);

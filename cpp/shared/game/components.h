@@ -436,19 +436,35 @@ struct SpongeDamageState {
 ///
 /// Contributions are tracked so that loot and XP go to everyone who fought the
 /// mob rather than whoever happened to land the last hit.
+///
+/// Shares are keyed by CONNECTION when one is known -- the same reason
+/// LootClaim is. A flower is destroyed and rebuilt on every death (and on a
+/// leave to the title screen that rejoins the map), so an entity-only ledger
+/// would throw away damage the moment the player respawned. The connection is
+/// stable across that; a full reconnect is a new session and forfeits, as
+/// drops already do. Zero owner is a bot / harness, keyed by body alone.
 struct Bounty {
     double xp = 0;
     struct Share {
         Entity player = NULL_ENTITY;
+        net::ConnectionId owner = 0;
         double damage = 0;
     };
     std::vector<Share> contributors;
 
-    void credit(Entity player, double damage) {
+    void credit(Entity player, double damage, net::ConnectionId owner = 0) {
         for (Share& s : contributors) {
-            if (s.player == player) { s.damage += damage; return; }
+            if (owner != 0 && s.owner == owner) {
+                s.player = player;
+                s.damage += damage;
+                return;
+            }
+            if (owner == 0 && s.owner == 0 && s.player == player) {
+                s.damage += damage;
+                return;
+            }
         }
-        contributors.push_back({player, damage});
+        contributors.push_back({player, owner, damage});
     }
 };
 
@@ -587,6 +603,7 @@ struct PlayerModifiers {
     /// Published here rather than recomputed at each impact so that the
     /// level-up path can rebuild the same figure the petal pass wrote.
     double bodyDamageBonus = 0.0;
+    bool passThroughMobs = false;
     double sizeScale = 1.0;
     double luck = 1.0;          ///< TypeScript's neutral luck value
     double magnetism = 0.0;     ///< adds to pickup radius
@@ -638,6 +655,9 @@ struct PlayerModifiers {
     /// The share of every heal past max health that becomes shield: the best
     /// worn amulet's figure. Zero without one.
     double overhealShield = 0.0;
+    /// Strongest worn Ruby only; additional strikes never trigger another chain.
+    double lightningRepeatChance = 0.0;
+    int maxLightningRepeats = 0;
     /// What every heal this flower receives is scaled up by, less one: every
     /// worn basil's Heal Bonus, stacked harmonically (best + second / 2 +
     /// third / 3 ...). Zero without one.
@@ -1093,6 +1113,8 @@ struct Npc {
     /// Replicated with the NPC, so the window shows the recipe this one
     /// makes. 0 for every other NPC.
     std::uint8_t recipe = 0;
+    double recipeReadyAtMillis = 0;
+    bool cutterPassable = false; ///< Training dummy body.
 };
 
 /// A mob whose ring is made of petals that hatch pets (PetalConfig::
@@ -1531,7 +1553,10 @@ struct LightningClock {
 /// side of the rim counts as inside, and a strike wants every one of those to
 /// stay exactly what the burst already had. All it wants is a different colour
 /// on the number.
-struct LightningBurst {};
+struct LightningBurst {
+    /// Only a strike from the Lightning petal can trigger Capacitor's follow-up.
+    bool energizesCapacitor = false;
+};
 
 struct GroundEffect {
     GroundEffectKind kind = GroundEffectKind::Poison;

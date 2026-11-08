@@ -33,6 +33,7 @@
 #include <string>
 
 #include "server/systems/petals.h"
+#include "server/splitter_placement.h"
 #include "shared/game/config.h"
 #include "shared/game/constants.h"
 #include "shared/game/terrain.h"
@@ -218,15 +219,9 @@ bool GameServer::splitSession(Session& session) {
     const double invulnerableUntil = wounded != nullptr ? wounded->invulnerableUntilMillis : 0.0;
     const PlayerProgress* earned = world_.tryGet<PlayerProgress>(session.entity);
     const PlayerProgress progress = earned != nullptr ? *earned : PlayerProgress{};
-    Vec2 left{centre.x - reach, centre.y};
-    Vec2 right{centre.x + reach, centre.y};
-    // A seam that puts either half inside a wall is not a seam: that half
-    // stays where the flower was standing, and the ordinary body separation
-    // pushes the pair apart on the next tick. Tested on the CENTRE alone --
-    // the flower already fits where it is standing, and a swept test that
-    // refused every seam touching a wall would refuse most of the maze.
-    if (terrain_->blocked(left, realm)) left = centre;
-    if (terrain_->blocked(right, realm)) right = centre;
+    const auto positions = splitterPositions(*terrain_, realm, centre, reach);
+    const Vec2 left = positions[0];
+    const Vec2 right = positions[1];
 
     const Entity clone = createPlayerBody(session, realm, right);
     if (clone == NULL_ENTITY) return false;

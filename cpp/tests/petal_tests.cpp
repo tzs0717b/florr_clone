@@ -88,6 +88,8 @@ const char* const kPetalsJson = R"JSON({
   "relic":    {"name":"Relic","damage":0,"health":null,"size":1,"cooldown":1,"count":0,"range":0,"fixedDirection":0,"noPhysics":true,"playerModifiers":{"maxHealth":1.1},"color":"#C7A138"},
   "champion_crown":{"name":"Champion's Crown","damage":0,"health":null,"size":1,"cooldown":1,"count":0,"range":0,"equipFlags":"Crown","noPhysics":true,"color":"#FFDC06"},
   "rubber":   {"name":"Rubber","damage":1,"health":30,"size":1.2,"cooldown":2500,"count":1,"color":"#EEEEEE"},
+  "cutter": {"name":"Cutter","damage":0,"health":null,"size":1,"cooldown":1,"count":0,"noPhysics":true},
+  "ruby":     {"name":"Ruby","damage":8,"health":20,"size":1,"cooldown":3000,"count":1,"lightningRepeatChance":0.7,"color":"#ef3658"},
   "amulet":   {"name":"Amulet","damage":0,"health":10,"size":1,"cooldown":2000,"count":1,"defendOnly":true,"color":"#FF94C9"},
   "basil":    {"name":"Basil","damage":5,"health":15,"size":1.3,"cooldown":2500,"count":1,"defendOnly":true,"ignoresMobs":true,"color":"#319E40"},
   "disc":     {"name":"Disc","damage":0,"health":null,"size":1,"cooldown":1,"count":0,"range":0,"equipFlags":"Disc","noPhysics":true,"color":"#111111"},
@@ -983,7 +985,7 @@ TEST(a_defend_only_petal_is_never_attracted) {
 // Lightning
 // ---------------------------------------------------------------------------
 
-/// PetalSystem's own kLightningRadius, which is private to it. Spelling the
+/// PetalSystem's lightning radius. Spelling the
 /// number out here is deliberate: a test that hard-codes it is what notices the
 /// reach changing under a strike that is supposed to cover a screen.
 constexpr double kStrikeRadius = 1000.0;
@@ -1363,11 +1365,10 @@ TEST(a_strike_into_a_pile_keeps_the_nearest_bolts) {
 // The battery
 // ---------------------------------------------------------------------------
 
-/// PetalSystem's own kBatteryCharges and kBatteryStrikeIntervalMillis, which
-/// are private to it. Spelt out here for the reason kStrikeRadius is: a test
+/// Expected battery figures, spelt out for the reason kStrikeRadius is: a test
 /// that hard-codes them is what notices a battery quietly growing a fourth
 /// charge or losing its pacing.
-constexpr int kBatteryCharges = 3;
+constexpr int kExpectedBatteryCharges = 3;
 constexpr double kBatteryIntervalMillis = 500.0;
 
 std::size_t countStrikes(const Rig& rig) {
@@ -1407,18 +1408,18 @@ TEST(a_battery_arrives_with_three_charges_and_spends_one_per_slam) {
     Rig rig;
     rig.equip(0, "battery");
     rig.settleEquips();
-    CHECK_EQ(batteryCharges(rig), kBatteryCharges);
+    CHECK_EQ(batteryCharges(rig), kExpectedBatteryCharges);
 
     // Nothing to ram: the charges are not a timer and must not tick away on
     // an empty field.
     rig.tick(40);
     CHECK_EQ(countStrikes(rig), std::size_t(0));
-    CHECK_EQ(batteryCharges(rig), kBatteryCharges);
+    CHECK_EQ(batteryCharges(rig), kExpectedBatteryCharges);
 
     ramMob(rig);
     rig.tick();
     CHECK_EQ(countStrikes(rig), std::size_t(1));
-    CHECK_EQ(batteryCharges(rig), kBatteryCharges - 1);
+    CHECK_EQ(batteryCharges(rig), kExpectedBatteryCharges - 1);
 }
 
 TEST(a_battery_paces_its_strikes_half_a_second_apart) {
@@ -1448,7 +1449,7 @@ TEST(a_battery_reloads_once_its_third_charge_is_gone) {
 
     // Three strikes, and the petal is off the ring: it has no health pool, so
     // spending the last charge is the only thing that can ever retire it.
-    CHECK(rig.tickUntil([&] { return countStrikes(rig) >= std::size_t(kBatteryCharges); }, 120));
+    CHECK(rig.tickUntil([&] { return countStrikes(rig) >= std::size_t(kExpectedBatteryCharges); }, 120));
     CHECK(rig.tickUntil([&] { return liveBattery(rig) == NULL_ENTITY; }, 5));
     CHECK(rig.slot(0).broken);
 
@@ -1464,7 +1465,7 @@ TEST(a_battery_reloads_once_its_third_charge_is_gone) {
     rig.world.destroy(mob);
     CHECK(rig.tickUntil([&] { return !rig.slot(0).broken && liveBattery(rig) != NULL_ENTITY; },
                         200));
-    CHECK_EQ(batteryCharges(rig), kBatteryCharges);
+    CHECK_EQ(batteryCharges(rig), kExpectedBatteryCharges);
 
     // And it is a working one.
     ramMob(rig);
@@ -1604,20 +1605,14 @@ TEST(a_battery_ignores_a_mob_that_only_touches_the_ring) {
     addMob(rig, orbit);
     rig.tick(40);
     CHECK_EQ(countStrikes(rig), std::size_t(0));
-    CHECK_EQ(batteryCharges(rig), kBatteryCharges);
+    CHECK_EQ(batteryCharges(rig), kExpectedBatteryCharges);
 }
 
 // ---------------------------------------------------------------------------
 // The capacitor
 // ---------------------------------------------------------------------------
 
-/// PetalSystem's own capacitor figures, private to it and spelt out here for
-/// the reason the battery's are.
-constexpr double kCapacitorMaxCharge = 60.0;
-constexpr double kCapacitorWindowMillis = 1000.0;
-
-/// A capacitor on a frozen ring, with a mob sitting on it. Off its centre by a
-/// few units, which touchesMob would otherwise read as a degenerate overlap.
+/// A capacitor on a frozen ring, with a mob sitting on it.
 Entity touchCapacitor(Rig& rig, Rarity rarity = Rarity::Common) {
     rig.equip(0, "capacitor", rarity);
     rig.freezeRing();
@@ -1655,8 +1650,12 @@ TEST(a_capacitor_discharges_what_it_banked_when_contact_ends) {
     pullAway(rig, mob);
     rig.tick();
     CHECK_EQ(countStrikes(rig), std::size_t(1));
-    // One point per millisecond: one tick against the mob, under the cap.
-    CHECK_NEAR(lastStrikeDamage(rig), net::kTickMillis, 1e-6);
+    // One tick against the mob, under the cap.
+    const double charge = net::kTickMillis * kCapacitorChargePerMillis;
+    CHECK_NEAR(lastStrikeDamage(rig), charge, 1e-6);
+    CombatSystem combat;
+    ricochetCombatTick(rig, combat);
+    CHECK_NEAR(rig.healthOf(mob), 10000.0 - charge, 1e-6);
 
     // Spent: stepping clear again throws nothing more.
     rig.tick(40);
@@ -1676,7 +1675,7 @@ TEST(a_capacitor_holds_no_more_than_its_cap) {
     CHECK_NEAR(lastStrikeDamage(rig), kCapacitorMaxCharge, 1e-6);
 }
 
-TEST(a_capacitor_that_never_leaves_discharges_every_second) {
+TEST(a_capacitor_that_never_leaves_discharges_periodically) {
     if (!contentLoaded()) return;
     Rig rig;
     touchCapacitor(rig);
@@ -1694,6 +1693,34 @@ TEST(a_capacitor_that_never_leaves_discharges_every_second) {
     CHECK_NEAR(rig.now - first, kCapacitorWindowMillis, 1e-6);
 }
 
+TEST(a_capacitor_charges_from_cutter_body_overlap) {
+    if (!contentLoaded()) return;
+    Rig rig;
+    rig.equip(0, "capacitor");
+    rig.freezeRing();
+    rig.settleEquips();
+    rig.settleRing();
+    addMob(rig, rig.position(rig.player));
+    CHECK(!rig.tickUntil([&] { return countStrikes(rig) > 0; }, 30));
+
+    rig.equip(1, "cutter");
+    CHECK(rig.tickUntil([&] { return countStrikes(rig) > 0; }, 60));
+    CHECK_NEAR(lastStrikeDamage(rig), kCapacitorMaxCharge, 1e-6);
+}
+
+TEST(capacitor_contact_discharge_gains_half_the_reload_talent_reduction) {
+    if (!contentLoaded()) return;
+    Rig rig;
+    rig.world.ensure<PlayerSkillTree>(rig.player).skills.set(SkillId::Reload,
+                                                            rarityIndex(Rarity::Unique));
+    touchCapacitor(rig);
+    const double start = rig.now;
+    CHECK(rig.tickUntil([&] { return countStrikes(rig) > 0; }, 60));
+    // The 571.5 ms window is reached on tick 18 at 30 Hz.
+    CHECK_NEAR(rig.now - start, 18 * net::kTickMillis, 1e-6);
+    CHECK_NEAR(lastStrikeDamage(rig), kCapacitorMaxCharge, 1e-6);
+}
+
 TEST(a_capacitor_climbs_the_rarity_ladder_like_lightning) {
     if (!contentLoaded()) return;
     Rig rig;
@@ -1704,6 +1731,67 @@ TEST(a_capacitor_climbs_the_rarity_ladder_like_lightning) {
     CHECK_EQ(countStrikes(rig), std::size_t(1));
     CHECK_NEAR(lastStrikeDamage(rig), kCapacitorMaxCharge * petalStatScale(Rarity::Legendary),
                1e-6);
+}
+
+TEST(lightning_triggers_only_the_strongest_capacitor_on_one_target) {
+    if (!contentLoaded()) return;
+    Rig rig;
+    rig.world.ensure<PlayerSkillTree>(rig.player).skills.set(SkillId::Reload,
+                                                            rarityIndex(Rarity::Unique));
+    rig.equip(0, "lightning");
+    rig.equip(1, "capacitor");
+    rig.equip(2, "capacitor", Rarity::Uncommon);
+    rig.freezeRing();
+    rig.settleEquips();
+    rig.settleRing();
+    const Vec2 orbit = rig.position(rig.petals(0).front());
+    const Entity nearest = addMob(rig, {orbit.x + 2.0, orbit.y});
+    const Entity farther = addMob(rig, {orbit.x + 500.0, orbit.y});
+    CHECK(rig.tickUntil([&] { return countStrikes(rig) == 1; }, 60));
+
+    // Resolve the real Lightning petal's field with two live targets and no
+    // direct ring hits, so only the original strike and follow-up count here.
+    const auto& content = fixture().registry;
+    SpatialGrid grid;
+    for (const Entity mob : {nearest, farther}) {
+        grid.insert(mob, Realm::Overworld, rig.position(mob), rig.world.get<Body>(mob).radius);
+    }
+    CombatSystem combat;
+    combat.beginTick(rig.world, rig.now, net::kTickSeconds, rig.events);
+    combat.runWorldPhase(rig.world, grid, content, rig.now, net::kTickSeconds);
+    const double lightningDamage = content.petalStats(petalId("lightning"), Rarity::Common).damage;
+    const double followUp = kCapacitorSynergyDamage * petalStrengthScale(Rarity::Uncommon);
+    CHECK_NEAR(rig.healthOf(nearest), 10000.0 - lightningDamage - followUp, 1e-6);
+    CHECK_NEAR(rig.healthOf(farther), 10000.0 - lightningDamage, 1e-6);
+    CHECK_EQ(countStrikes(rig), std::size_t(2));
+
+    // A second valid Lightning strike within the shared cooldown only deals
+    // its own damage. Keep it independent of the ring's reload.
+    const auto resolveBurst = [&](bool fromLightningPetal, double delayMillis) {
+        const Entity burst = rig.world.create();
+        rig.world.add<Transform>(burst, Transform{orbit});
+        rig.world.add<GroundEffect>(
+            burst, GroundEffect{GroundEffectKind::Poison, rig.player, kLightningRadius,
+                                0.0, 1.0, Rarity::Common, lightningDamage, 0.0});
+        rig.world.add<LightningBurst>(burst, LightningBurst{fromLightningPetal});
+        rig.world.add<Lifetime>(burst, Lifetime{net::kTickSeconds * 1.5});
+        const double nowMillis = rig.now + delayMillis;
+        combat.beginTick(rig.world, nowMillis, net::kTickSeconds, rig.events);
+        combat.runWorldPhase(rig.world, grid, content, nowMillis, net::kTickSeconds);
+    };
+    constexpr double kTalentedCooldownMillis = 571.5;
+    resolveBurst(true, kTalentedCooldownMillis - net::kTickMillis);
+    CHECK_NEAR(rig.healthOf(nearest), 10000.0 - 2 * lightningDamage - followUp, 1e-6);
+    CHECK_NEAR(rig.healthOf(farther), 10000.0 - 2 * lightningDamage, 1e-6);
+    CHECK_EQ(countStrikes(rig), std::size_t(2));
+
+    // Other electrical bursts cannot trigger the combo even once ready.
+    resolveBurst(false, kTalentedCooldownMillis);
+    CHECK_NEAR(rig.healthOf(nearest), 10000.0 - 3 * lightningDamage - followUp, 1e-6);
+    CHECK_EQ(countStrikes(rig), std::size_t(2));
+    resolveBurst(true, kTalentedCooldownMillis + net::kTickMillis);
+    CHECK_NEAR(rig.healthOf(nearest), 10000.0 - 4 * lightningDamage - 2 * followUp, 1e-6);
+    CHECK_EQ(countStrikes(rig), std::size_t(3));
 }
 
 // ---------------------------------------------------------------------------
@@ -1746,7 +1834,7 @@ TEST(the_reload_talent_shortens_a_broken_petals_cooldown) {
     if (!contentLoaded()) return;
 
     // The same break on two flowers, one of them at the top of the Reload
-    // branch. Basic's own cooldown is 1200ms, which unique cuts to 29.2%.
+    // branch. Basic's own cooldown is 1200ms, which unique cuts to 27%.
     const auto breakBasic = [](Rig& rig) {
         rig.equip(0, "basic");
         rig.settleEquips();
@@ -1764,7 +1852,7 @@ TEST(the_reload_talent_shortens_a_broken_petals_cooldown) {
     unique.world.add<PlayerSkillTree>(unique.player);
     unique.world.get<PlayerSkillTree>(unique.player)
         .skills.set(SkillId::Reload, rarityIndex(Rarity::Unique));
-    CHECK_NEAR(breakBasic(unique), 350.4, 1e-9);
+    CHECK_NEAR(breakBasic(unique), 324.0, 1e-9);
 
     // And it is a real wait, not just a shorter number on the slot. Twelve
     // ticks is 400ms: enough for unique to have its petal back, and far short
@@ -1808,7 +1896,7 @@ TEST(the_reload_talent_paces_a_projectile_petals_volleys) {
     CHECK(slow > 0);
     // Not an exact ratio: the first volley of each run is paced by the equip
     // reload rather than by the shot timer, so unique lands near, not exactly
-    // on, 1/0.292 times the count.
+    // on, 1/0.270 times the count.
     CHECK(fast >= slow * 3);
 }
 
@@ -1854,12 +1942,12 @@ TEST(a_golden_leaf_cuts_the_reload_of_the_rest_of_its_bar) {
     both.equip(1, "golden_leaf", Rarity::Ultra);
     both.equip(2, "golden_leaf", Rarity::Common);
     both.settleEquips();
-    CHECK_NEAR(breakSlot(both, 0), 350.4 * 0.825 * 0.975, 1e-9);
+    CHECK_NEAR(breakSlot(both, 0), 324.0 * 0.825 * 0.975, 1e-9);
     // And a leaf's reload is cut by the other leaf as well as by itself.
     const double commonLeafReload =
         registry.petalStats(petalId("golden_leaf"), Rarity::Common).reloadMillis;
     CHECK_NEAR(breakSlot(both, 2),
-               std::max(commonLeafReload * 0.292 * 0.825 * 0.975, net::kTickMillis), 1e-9);
+               std::max(commonLeafReload * 0.270 * 0.825 * 0.975, net::kTickMillis), 1e-9);
 }
 
 TEST(partial_damage_does_not_break_a_petal) {
@@ -2902,13 +2990,14 @@ TEST(a_burst_heal_charges_homes_consumes_and_reloads) {
 
     // Input does not gate a rose: after charging it flies home because health
     // is missing, delivers one burst, and enters its normal break cooldown.
-    CHECK_NEAR(rig.world.get<Health>(rig.player).current, 62.0, 1e-9);
+    // The healer's 12-point burst receives the server-wide healing x3.
+    CHECK_NEAR(rig.world.get<Health>(rig.player).current, 86.0, 1e-9);
     CHECK(rig.slot(0).broken);
     CHECK_EQ(rig.petals(0).size(), std::size_t(0));
 
     CHECK(rig.tickUntil([&] { return !rig.slot(0).broken; }));
     CHECK_EQ(rig.petals(0).size(), std::size_t(1));
-    CHECK(rig.tickUntil([&] { return rig.world.get<Health>(rig.player).current > 70.0; }, 50));
+    CHECK(rig.tickUntil([&] { return rig.world.get<Health>(rig.player).current > 86.0; }, 50));
 }
 
 /// The same burst, on a flower running flat out.
@@ -5907,10 +5996,11 @@ TEST(an_amulet_turns_its_tiers_share_of_overheal_into_shield) {
     ShieldState& shield = rig.world.get<ShieldState>(rig.player);
     shield.amount = 0.0;
     health.current = health.max - 10.0;
-    // Ten points fill the bar; the other fifty spill, and a fifth of it stays.
+    // Requested 60 lands as 180 (kPlayerHealMultiplier). Ten fill the bar;
+    // 170 spill; a fifth of that stays.
     CombatSystem::landHeal(rig.world, rig.player, health, 60.0);
     CHECK_NEAR(health.current, health.max, 1e-9);
-    CHECK_NEAR(shield.amount, 10.0, 1e-9);
+    CHECK_NEAR(shield.amount, 34.0, 1e-9);
     // Capped at max health, as a shell's shield is.
     CombatSystem::landHeal(rig.world, rig.player, health, health.max * 100.0);
     CHECK_NEAR(shield.amount, health.max, 1e-9);
@@ -5929,8 +6019,9 @@ TEST(a_basil_grows_every_heal_by_florrs_bonus_and_stacks_harmonically) {
     Rig rig;
     Health& health = rig.world.get<Health>(rig.player);
     health.current = health.max - 100.0;
+    // 10 × kPlayerHealMultiplier = 30.
     CombatSystem::landHeal(rig.world, rig.player, health, 10.0);
-    CHECK_NEAR(health.current, health.max - 90.0, 1e-9);
+    CHECK_NEAR(health.current, health.max - 70.0, 1e-9);
 
     rig.equip(0, "basil", Rarity::Mythic);
     rig.settleEquips();
@@ -5952,8 +6043,9 @@ TEST(a_basil_grows_every_heal_by_florrs_bonus_and_stacks_harmonically) {
     CHECK_NEAR(rig.modifiers().healBonus, 0.5 + 0.5 / 2.0 + 0.45 / 3.0, 1e-9);
     Health& grown = rig.world.get<Health>(rig.player);
     grown.current = grown.max - 100.0;
+    // 10 × 3 × 1.9 healBonus = 57.
     CombatSystem::landHeal(rig.world, rig.player, grown, 10.0);
-    CHECK_NEAR(grown.current, grown.max - 81.0, 1e-9);
+    CHECK_NEAR(grown.current, grown.max - 43.0, 1e-9);
     // Still never past max.
     CombatSystem::landHeal(rig.world, rig.player, grown, grown.max);
     CHECK_NEAR(grown.current, grown.max, 1e-9);
@@ -5969,10 +6061,10 @@ TEST(a_basil_grows_the_heal_an_amulet_keeps_the_overflow_of) {
     ShieldState& shield = rig.world.get<ShieldState>(rig.player);
     shield.amount = 0.0;
     health.current = health.max - 10.0;
-    // 40 grows to 60: ten fill the bar, fifty spill, and the amulet keeps a fifth.
+    // 40 × 3 × 1.5 basil = 180: ten fill the bar, 170 spill, amulet keeps a fifth.
     CombatSystem::landHeal(rig.world, rig.player, health, 40.0);
     CHECK_NEAR(health.current, health.max, 1e-9);
-    CHECK_NEAR(shield.amount, 10.0, 1e-9);
+    CHECK_NEAR(shield.amount, 34.0, 1e-9);
 }
 
 TEST(a_disc_resists_collisions_by_florrs_curve_and_does_not_stack) {
@@ -6606,4 +6698,34 @@ TEST(admin_orb_keeps_mana_full_and_pays_costs_larger_than_the_pool) {
     CHECK(!mana.infinite);
     CHECK(!mana.canAfford(30));
     CHECK_NEAR(mana.max, 0, 0.01);
+}
+
+TEST(ruby_uses_the_strongest_active_slot_and_stops_when_unequipped) {
+    if (!contentLoaded()) return;
+    Rig rig;
+    rig.equip(0, "ruby", Rarity::Common);
+    rig.equip(1, "ruby", Rarity::Ultra);
+    rig.equip(kLoadoutActiveSlots, "ruby", Rarity::Apex);
+    rig.tick();
+    CHECK_NEAR(rig.modifiers().lightningRepeatChance, 0.88, 1e-9);
+    CHECK_EQ(rig.modifiers().maxLightningRepeats, 4);
+    rig.unequip(1);
+    rig.tick();
+    CHECK_NEAR(rig.modifiers().lightningRepeatChance, 0.7, 1e-9);
+    CHECK_EQ(rig.modifiers().maxLightningRepeats, 2);
+    rig.unequip(0);
+    rig.tick();
+    CHECK_NEAR(rig.modifiers().lightningRepeatChance, 0, 1e-9);
+    CHECK_EQ(rig.modifiers().maxLightningRepeats, 0);
+}
+
+TEST(cutter_only_active_equipment_removes_mob_separation) {
+    Rig rig;
+    rig.equip(0, "cutter", Rarity::Common);
+    rig.tick();
+    CHECK(rig.modifiers().passThroughMobs);
+    rig.unequip(0);
+    rig.equip(kLoadoutActiveSlots, "cutter", Rarity::Common);
+    rig.tick();
+    CHECK(!rig.modifiers().passThroughMobs);
 }

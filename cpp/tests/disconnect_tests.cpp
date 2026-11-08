@@ -49,7 +49,7 @@ using flix::testsupport::seedUser;
 constexpr const char* kPassword = "password7";
 
 /// The flower an account steers, or NULL_ENTITY. By account rather than by
-/// nameplate: a join that picks no name is called "Unnamed", whoever it is.
+/// nameplate: a join that picks no name uses the account username.
 Entity bodyOf(Harness& h, const char* username) {
     const Account* account = h.server.database().findUser(username);
     if (account == nullptr) return NULL_ENTITY;

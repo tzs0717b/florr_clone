@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "client/ease.h"
+#include "client/ui/content_i18n.h"
 #include "client/ui/item_tile.h"
 #include "client/ui/menu_theme.h"
 #include "client/ui/menus.h"
@@ -20,6 +21,7 @@
 #include "client/ui/text_input.h"
 #include "shared/core/text.h"
 #include "shared/game/config.h"
+#include "shared/game/rarity.h"
 
 namespace flix {
 
@@ -127,8 +129,7 @@ TooltipDelay tooltipDelay;
 bool matchesSearch(std::uint16_t petalIndex, const std::string& needle) {
     if (needle.empty()) return true;
     const PetalConfig& config = content().petal(petalIndex);
-    return lowerCase(config.name).find(needle) != std::string::npos ||
-           lowerCase(config.id).find(needle) != std::string::npos;
+    return petalMatchesSearch(config.id, config.name, needle);
 }
 
 /// Places `entries` as a centred five-column block starting at `y`, then
@@ -217,6 +218,11 @@ Grid buildGrid(const Profile& profile, double innerWidth, bool stacked,
     return grid;
 }
 
+/// Hit / paint box of the thumb strip: right-inset column over the grid view.
+Rect thumbTrack(Rect panel, double contentTop, double visibleH) {
+    return {panel.right() - kThumbInset - kThumbWidth, contentTop, kThumbWidth, visibleH};
+}
+
 /// The scroll thumb, and only the thumb: a square-cornered quarter-black bar
 /// inset from the panel's right edge.
 ///
@@ -234,6 +240,22 @@ void scrollThumb(Canvas& canvas, Rect panel, double contentTop, double visibleH,
                      static_cast<float>(thumbY), static_cast<float>(kThumbWidth),
                      static_cast<float>(thumbHeight), static_cast<float>(kThumbWidth * 0.5));
     canvas.fill();
+}
+
+/// Scrollbar drag state.
+///
+/// Belongs on InventoryPanel, but menus.h is not this change's to edit.
+/// One inventory panel in the process, so a file-local record is the same
+/// state under another name (gallery / leaderboard do the same).
+struct ThumbDrag {
+    bool active = false;
+    double startY = 0;
+    double startOffset = 0;
+};
+
+ThumbDrag& thumbDrag() {
+    static ThumbDrag drag;
+    return drag;
 }
 
 /// A whole number with no separators, for the ALT variant of a stat row. The
@@ -276,6 +298,10 @@ std::string colourMarkup(const std::string& text, std::uint32_t rgb) {
     return open + text + "</c>";
 }
 
+} // namespace
+
+namespace ui {
+
 /// Name / tier / description / HP / damage, in the shared petal tooltip's
 /// order. HP and damage carry the account's skill tiers, since that is the
 /// number the player will actually see in the field, and the reload carries
@@ -293,7 +319,8 @@ std::vector<TooltipLine> petalTooltipLines(std::uint16_t petalIndex, Rarity rari
     // in mana and how long its reload is, then the wait between spawning and
     // acting -- a rose's heal, an orb's mana -- when it has one ("3.5s +
     // 1.5s"). A worn petal has no reload and florr prints nothing for it.
-    TooltipLine title{config.name, 20.0};
+    const std::string enName = titleCase(config.name);
+    TooltipLine title{petalNameTr(config.id, enName.c_str()), 20.0};
     if (!config.noPhysics) {
         if (stats.requiredMana > 0.0) {
             // Paid on spawn, not on use -- see PetalConfig::requiredMana.
@@ -308,13 +335,36 @@ std::vector<TooltipLine> petalTooltipLines(std::uint16_t petalIndex, Rarity rari
         title.badges.push_back({reload, kPaper, TooltipIcon::Reload});
     }
     lines.push_back(title);
-    lines.push_back({rarityLabel(rarity), 14.0, rarityColor(rarity)});
+    lines.push_back({rarityTr(rarity), 14.0, rarityColor(rarity)});
     if (!config.description.empty()) {
         // florr's descriptions, from its English table, colour markup and
         // all. "{rarity}" is the card's own tier in its colour, as florr's
         // {0:rarity} is: a champion's crown hands out a Basic of whatever tier
         // the crown is.
-        std::string description = config.description;
+        std::string description = petalDescTr(config.id, config.description.c_str());
+        if (config.id == "battery" && language() != Language::Zh) {
+            description = "Discharges lightning when your flower body collides with a mob. "
+                          "Each strike spends a charge. The battery reloads when empty.";
+        } else if (config.id == "flower") {
+            description = trEnZh(
+                "Breaks on contact with a mob. It summons Glitch Flowers at the point of impact "
+                "or corrupts your flower, enabling PvP anywhere. Apex summons Eternal pets.",
+                "碰到怪物时破裂，在碰撞处召唤故障花，或使自己的花朵故障并进入可交战状态。"
+                "Apex 花瓣召唤永恒故障花。");
+        } else if (config.id == "capacitor") {
+            description = trEnZh(
+                "Charges while touching an enemy. Discharges when contact ends or the timer fills. "
+                "With Cutter, body overlap also charges it. When your Lightning hits, the strongest "
+                "equipped Capacitor strikes one surviving target again. Both timers gain half of the "
+                "Reload talent's reduction.",
+                "碰到敌人时充电，离开敌人或达到持续接触时长时放电。"
+                "装备 Cutter 后身体重叠也能充电。闪电花瓣命中时，最强的电容器会对一个仍存活的目标追加电击。"
+                "持续放电间隔和联动冷却均享受 Reload 天赋一半的缩减。");
+        } else if (config.id == "lightning") {
+            description = trEnZh(
+                "Strikes nearby enemies. Hits can trigger a follow-up from an equipped Capacitor.",
+                "电击附近敌人。命中时可触发已装备的电容器追加电击。");
+        }
         if (rarity == Rarity::Admin) {
             if (config.id == "glitch") description = "Fully heals touched mobs. Healing lockouts still apply.";
             else if (config.id == "powder") description = "Grants extreme movement speed.";
@@ -331,7 +381,7 @@ std::vector<TooltipLine> petalTooltipLines(std::uint16_t petalIndex, Rarity rari
         static const std::string kRaritySlot = "{rarity}";
         for (std::size_t at = description.find(kRaritySlot); at != std::string::npos;
              at = description.find(kRaritySlot, at)) {
-            const std::string tier = colourMarkup(rarityLabel(rarity), rarityColor(rarity));
+            const std::string tier = colourMarkup(rarityTr(rarity), rarityColor(rarity));
             description.replace(at, kRaritySlot.size(), tier);
             at += tier.size();
         }
@@ -344,13 +394,13 @@ std::vector<TooltipLine> petalTooltipLines(std::uint16_t petalIndex, Rarity rari
 
     // Dimmed to gardn's 0xffffff90 rather than a pre-mixed grey, and spaced
     // off the description when there is one, off the tier row when there is not.
-    TooltipLine hp{"HP: " + abbreviate(health), 12.0, kPaper,
+    TooltipLine hp{std::string(tipHp()) + abbreviate(health), 12.0, kPaper,
                    config.description.empty() ? 10.0 : 4.0};
     hp.alpha = 0.56;
     hp.labelColor = kStatHealth;
-    hp.altText = "HP: " + exactNumber(health);
+    hp.altText = std::string(tipHp()) + exactNumber(health);
 
-    const std::string damageLabel = "Damage: ";
+    const std::string damageLabel = tipDamage();
     TooltipLine hit{damageLabel + abbreviate(damage), 12.0};
     hit.alpha = 0.56;
     hit.labelColor = kStatDamage;
@@ -366,8 +416,8 @@ std::vector<TooltipLine> petalTooltipLines(std::uint16_t petalIndex, Rarity rari
     // Petal/Attribute/Damage/Lightning, "Damage: X (lightning)" with the
     // note in lightning cyan.
     if (config.lightningDamage) {
-        const std::string label = colourMarkup("Damage:", kStatDamage);
-        const std::string note = " " + colourMarkup("(lightning)", kStatLightning);
+        const std::string label = colourMarkup(tipDamage(), kStatDamage);
+        const std::string note = " " + colourMarkup(tipLightning(), kStatLightning);
         hit.text = label + " " + abbreviate(damage) + note;
         hit.altText = label + " " + exactNumber(damage) + note;
         hit.markup = true;
@@ -390,14 +440,71 @@ std::vector<TooltipLine> petalTooltipLines(std::uint16_t petalIndex, Rarity rari
         lines.push_back(charges);
     }
 
+    // Burst / passive heal: field value includes kPlayerHealMultiplier (and the
+    // Healing talent for the amount the flower actually receives).
+    const double healTalent = skills.effectScale(SkillId::Healing);
+    if (stats.heal > 0.0) {
+        const double heal =
+            std::round(stats.heal * healTalent * kPlayerHealMultiplier);
+        TooltipLine line{std::string(tipHeal()) + abbreviate(heal), 12.0};
+        line.alpha = 0.56;
+        line.labelColor = kStatHeal;
+        line.altText = std::string(tipHeal()) + exactNumber(heal);
+        lines.push_back(line);
+    }
+    if (stats.passiveHealPerSecond > 0.0) {
+        const double heal =
+            std::round(stats.passiveHealPerSecond * healTalent * kPlayerHealMultiplier * 100.0) /
+            100.0;
+        TooltipLine line{std::string(tipHealPerSec()) + abbreviate(heal), 12.0};
+        line.alpha = 0.56;
+        line.labelColor = kStatHeal;
+        line.altText = std::string(tipHealPerSec()) + exactNumber(heal);
+        lines.push_back(line);
+    }
+    if (stats.shield > 0.0) {
+        const double shield = std::round(stats.shield);
+        TooltipLine line{std::string(tipShield()) + abbreviate(shield), 12.0};
+        line.alpha = 0.56;
+        line.labelColor = kStatGeneric;
+        line.altText = std::string(tipShield()) + exactNumber(shield);
+        lines.push_back(line);
+    }
+    if (stats.poisonPerSecond > 0.0) {
+        const double pps = std::round(stats.poisonPerSecond);
+        const double secs = stats.poisonDurationMillis / 1000.0;
+        const char* sep = language() == Language::Zh ? "/秒 · " : "/s · ";
+        TooltipLine line{std::string(tipPoison()) + abbreviate(pps) + sep + exactNumber(secs) + "s",
+                         12.0};
+        line.alpha = 0.56;
+        line.labelColor = kStatPoison;
+        line.altText =
+            std::string(tipPoison()) + exactNumber(pps) + sep + exactNumber(secs) + "s";
+        lines.push_back(line);
+    }
+
     // Relic. The whole petal is this one number.
     if (petalSharesFlowerDamage(config)) {
-        TooltipLine bonus{"Flower Health: +" +
+        TooltipLine bonus{std::string(tipFlowerHealth()) + "+" +
                               exactNumber((stats.modifiers.maxHealth - 1.0) * 100.0) + "%",
                           12.0};
         bonus.alpha = 0.56;
         bonus.labelColor = kStatHealth;
         lines.push_back(bonus);
+    }
+
+    if (stats.lightningRepeatChance > 0.0) {
+        const bool chinese = language() == Language::Zh;
+        TooltipLine chance{std::string(chinese ? "闪电重复命中: " : "Lightning Repeat: ") +
+                               percentNumber(stats.lightningRepeatChance) + "%", 12.0};
+        chance.alpha = 0.56;
+        chance.labelColor = kStatGeneric;
+        lines.push_back(chance);
+        TooltipLine cap{std::string(chinese ? "最多追加电击: " : "Max Extra Strikes: ") +
+                            std::to_string(stats.maxLightningRepeats), 12.0};
+        cap.alpha = 0.56;
+        cap.labelColor = kStatGeneric;
+        lines.push_back(cap);
     }
 
     // Rubber. Its price is printed beside what it buys.
@@ -419,9 +526,9 @@ std::vector<TooltipLine> petalTooltipLines(std::uint16_t petalIndex, Rarity rari
         lines.push_back(convert);
     }
 
-    // Basil. florr's own line, and the whole of what the petal does.
+    // Basil. Percentage of each heal (after kPlayerHealMultiplier), not a flat.
     if (stats.healBonus > 0.0) {
-        TooltipLine bonus{"Heal Bonus: +" + percentNumber(stats.healBonus) + "%", 12.0};
+        TooltipLine bonus{std::string(tipHealBonus()) + percentNumber(stats.healBonus) + "%", 12.0};
         bonus.alpha = 0.56;
         bonus.labelColor = kStatHeal;
         lines.push_back(bonus);
@@ -473,54 +580,101 @@ std::vector<TooltipLine> petalTooltipLines(std::uint16_t petalIndex, Rarity rari
             std::snprintf(buffer, sizeof buffer, "%g", std::round(millis / 10.0) / 100.0);
             return std::string(buffer) + "s";
         };
-        TooltipLine undead{"Undead: " + seconds(stats.undeadMillis), 12.0};
+        TooltipLine undead{std::string(trEnZh("Undead duration: ", "不死持续：")) +
+                                seconds(stats.undeadMillis), 12.0};
         undead.alpha = 0.56;
         undead.labelColor = kStatUndead;
         lines.push_back(undead);
-        TooltipLine body{"Body Damage: -" + percentNumber(stats.undeadBodyDamageCut) + "%", 12.0};
+        TooltipLine body{std::string(tipBodyDamage()) + "-" +
+                             percentNumber(stats.undeadBodyDamageCut) + "%",
+                         12.0};
         body.alpha = 0.56;
         body.labelColor = kStatDamage;
         lines.push_back(body);
-        TooltipLine lock{"Unrevivable: " + seconds(stats.unrevivableMillis), 12.0};
+        TooltipLine lock{std::string(trEnZh("Revival blocked: ", "禁止复活：")) +
+                              seconds(stats.unrevivableMillis), 12.0};
         lock.alpha = 0.56;
         lock.labelColor = kStatDanger;
         lines.push_back(lock);
+    }
+    if (config.id == "clover" && stats.modifiers.luck > 0.0) {
+        lines.push_back({std::string(trEnZh("Luck: +", "幸运值：+")) +
+                         exactNumber(stats.modifiers.luck), 12.0});
+    }
+    if (config.id == "battery") {
+        const double strike = (stats.damage > 0.0 ? stats.damage :
+            kLightningFallbackDamage * petalStrengthScale(rarity)) * skills.effectScale(SkillId::Damage);
+        lines.push_back({std::string(trEnZh("Lightning damage: ", "闪电伤害：")) +
+                         abbreviate(strike), 12.0});
+        lines.push_back({std::string(trEnZh("Charges: ", "充能次数：")) +
+                         std::to_string(kBatteryCharges), 12.0});
+        lines.push_back({std::string(trEnZh("Minimum discharge interval: ", "放电间隔至少：")) +
+                         reloadSeconds(kBatteryStrikeIntervalMillis), 12.0});
+    }
+    if (config.id == "flower") {
+        lines.push_back({std::string(trEnZh("Summons: ", "召唤数量：")) +
+                         std::to_string(kFlowerPetCount), 12.0});
+        lines.push_back({std::string(trEnZh("Corruption chance: ", "故障概率：")) +
+                         percentNumber(kFlowerCorruptChance) + "%", 12.0});
+    }
+    if (config.id == "capacitor") {
+        const double chargeScale = petalStrengthScale(rarity) * skills.effectScale(SkillId::Damage);
+        const double chargeRate = kCapacitorChargePerMillis * chargeScale;
+        const auto cooldown = [&](double baseMillis) {
+            return exactNumber(capacitorCooldownMillis(baseMillis, skills.reloadScale())) +
+                   trEnZh(" ms", " 毫秒");
+        };
+        lines.push_back({std::string(trEnZh("Charge per millisecond: ", "每毫秒蓄积伤害：")) +
+                         (chargeRate < 1000 ? oneDecimal(chargeRate) : abbreviate(chargeRate)), 12.0});
+        lines.push_back({std::string(trEnZh("Max damage per hit: ", "单次闪电伤害上限：")) +
+                         abbreviate(kCapacitorMaxCharge * chargeScale), 12.0});
+        lines.push_back({std::string(trEnZh("Discharge interval on contact: ", "持续接触放电间隔：")) +
+                         cooldown(kCapacitorWindowMillis), 12.0});
+        lines.push_back({std::string(trEnZh("Lightning radius: ", "放电半径：")) +
+                         exactNumber(kLightningRadius), 12.0});
+        lines.push_back({std::string(trEnZh("Lightning follow-up: ", "联动追加伤害：")) +
+                         abbreviate(kCapacitorSynergyDamage * chargeScale), 12.0});
+        lines.push_back({std::string(trEnZh("Shared follow-up cooldown: ", "联动共享冷却：")) +
+                         cooldown(kCapacitorSynergyCooldownMillis), 12.0});
     }
 
     // Bur alone. Its description says the petal debuffs armour and cannot say
     // by how much, and how much is the entire question a player has about it:
     // whether this one out-strips the tier standing in front of them.
     if (stats.armorReduction > 0.0) {
-        TooltipLine strip{"Armor Debuff: -" + abbreviate(stats.armorReduction), 12.0};
+        const char* debuff = language() == Language::Zh ? "护甲削弱: -" : "Armor Debuff: -";
+        TooltipLine strip{std::string(debuff) + abbreviate(stats.armorReduction), 12.0};
         strip.alpha = 0.56;
         strip.labelColor = kStatArmor;
-        strip.altText = "Armor Debuff: -" + exactNumber(stats.armorReduction);
+        strip.altText = std::string(debuff) + exactNumber(stats.armorReduction);
         lines.push_back(strip);
     }
 
     // Bone. Its armour is the whole of what the petal is for and it climbs the
     // mob armour ladder, so the figure a player is weighing belongs here.
     if (stats.petalArmor > 0.0) {
-        TooltipLine armor{"Armor: " + abbreviate(stats.petalArmor), 12.0};
+        TooltipLine armor{std::string(tipArmor()) + abbreviate(stats.petalArmor), 12.0};
         armor.alpha = 0.56;
         armor.labelColor = kStatArmor;
-        armor.altText = "Armor: " + exactNumber(stats.petalArmor);
+        armor.altText = std::string(tipArmor()) + exactNumber(stats.petalArmor);
         lines.push_back(armor);
     }
 
     // Claw. Petal damage like the line above, so it carries the same talent.
     if (stats.critDamage > 0.0) {
         const double crit = std::round(stats.critDamage * skills.effectScale(SkillId::Damage));
-        TooltipLine bonus{"Crit Damage: +" + abbreviate(crit), 12.0};
+        TooltipLine bonus{std::string(tipCritDamage()) + "+" + abbreviate(crit), 12.0};
         bonus.alpha = 0.56;
         bonus.labelColor = kStatDamage;
-        bonus.altText = "Crit Damage: +" + exactNumber(crit);
+        bonus.altText = std::string(tipCritDamage()) + "+" + exactNumber(crit);
         lines.push_back(bonus);
     }
 
-    // Fang. A fraction of what it deals, so it reads as a percentage.
+    // Fang. landHeal multiplies the stolen amount by kPlayerHealMultiplier, so
+    // the card shows the effective share of damage returned as HP.
     if (stats.lifesteal > 0.0) {
-        TooltipLine steal{"Lifesteal: " + exactNumber(stats.lifesteal * 100.0) + "%", 12.0};
+        const double pct = stats.lifesteal * 100.0 * kPlayerHealMultiplier;
+        TooltipLine steal{std::string(tipLifesteal()) + exactNumber(pct) + "%", 12.0};
         steal.alpha = 0.56;
         steal.labelColor = kStatHeal;
         lines.push_back(steal);
@@ -541,7 +695,7 @@ std::vector<TooltipLine> petalTooltipLines(std::uint16_t petalIndex, Rarity rari
     if (stats.modifiers.damageReflection > 0.0) {
         TooltipLine reflect{"Reflection: " +
                                 exactNumber(stats.modifiers.damageReflection * 100.0) +
-                                "% vs " + rarityLabel(rarity),
+                                "% vs " + rarityTr(rarity),
                             12.0};
         reflect.alpha = 0.56;
         reflect.labelColor = kStatReflection;
@@ -598,16 +752,16 @@ std::vector<TooltipLine> petalTooltipLines(std::uint16_t petalIndex, Rarity rari
     // has to be on the card -- the description alone cannot say how much.
     if (stats.bodyDamage > 0.0) {
         const double body = std::round(stats.bodyDamage);
-        TooltipLine slam{"Body Damage: +" + abbreviate(body), 12.0};
+        TooltipLine slam{std::string(tipBodyDamage()) + "+" + abbreviate(body), 12.0};
         slam.alpha = 0.56;
         slam.labelColor = kStatDamage;
-        slam.altText = "Body Damage: +" + exactNumber(body);
+        slam.altText = std::string(tipBodyDamage()) + "+" + exactNumber(body);
         lines.push_back(slam);
     }
     return lines;
 }
 
-} // namespace
+} // namespace ui
 
 double InventoryPanel::preferredWidth() {
     // Five cells, their gaps, and the two unequal margins. The panel is sized
@@ -622,6 +776,7 @@ void InventoryPanel::reset() {
     // a window onto the account, not a wizard that starts over.
     searchField_.blur();
     tooltipDelay.reset();
+    thumbDrag() = {};
 }
 
 bool InventoryPanel::render(MenuContext& ctx) {
@@ -637,7 +792,8 @@ bool InventoryPanel::render(MenuContext& ctx) {
     const double centre = (gridLeft + gridRight) * 0.5;
 
     panelCard(canvas, panel, kInventorySkin);
-    panelTitle(canvas, panel, "Inventory", "Drag a petal to equip it");
+    panelTitle(canvas, panel, menuTitle(MenuId::Inventory),
+               language() == Language::Zh ? "拖动花瓣以装备" : "Drag a petal to equip it");
 
     // --- header controls ---------------------------------------------------
     const Rect closeRect = closeButtonRect(panel);
@@ -662,12 +818,10 @@ bool InventoryPanel::render(MenuContext& ctx) {
     TextStyle toggleLabel;
     toggleLabel.size = kToggleLabelSize;
     toggleLabel.roundJoin = true;
-    text(canvas, "Stack", toggleBoxRect.right() + 5.0,
+    text(canvas, tr(Msg::Stack), toggleBoxRect.right() + 5.0,
          toggleBoxRect.y + kToggleBoxSize * 0.5 + 1.0, toggleLabel);
 
-    // No placeholder: the browser's field is a bare white box until it is typed
-    // into, and a grey "Search" there reads as a value the filter is applying.
-    inputField(canvas, searchRect, search_, "", searchField_.focused, ctx.timeSeconds,
+    inputField(canvas, searchRect, search_, trEnZh("Search (中/EN)", "中英文搜索"), searchField_.focused, ctx.timeSeconds,
                &searchField_);
     panelClose(canvas, closeRect, closeRect.contains(mouse));
 
@@ -686,13 +840,34 @@ bool InventoryPanel::render(MenuContext& ctx) {
 
     scroll_.contentHeight = grid.contentHeight;
     scroll_.viewHeight = visibleH;
-    // The browser's wheel listener is on the whole canvas, so the title and the
-    // controls row scroll the grid too.
-    if (panel.contains(mouse)) scroll_.offset -= ctx.wheel() * kWheelStep;
+    const double maxScroll = scroll_.maxOffset();
+    const Rect track = thumbTrack(panel, view.y, visibleH);
+
+    // Thumb drag: grab anywhere in the right strip (gallery's rule). Applied
+    // before wheel / touch so a press on the bar is not also a grid fling.
+    ThumbDrag& drag = thumbDrag();
+    if (!ctx.window.mouseDown(MouseButton::Left)) drag.active = false;
+    if (ctx.pressed() && maxScroll > 0 && track.contains(mouse) &&
+        !closeRect.contains(mouse) && !toggleHit.contains(mouse) && !searchRect.contains(mouse)) {
+        drag.active = true;
+        drag.startY = mouse.y;
+        drag.startOffset = scroll_.offset;
+    }
+    if (drag.active) {
+        scroll_.offset =
+            drag.startOffset + (mouse.y - drag.startY) * (maxScroll / std::max(1.0, visibleH));
+    } else if (panel.contains(mouse)) {
+        // The browser's wheel listener is on the whole canvas, so the title and
+        // the controls row scroll the grid too.
+        scroll_.offset -= ctx.wheel() * kWheelStep;
+    }
     // A finger drags the grid itself, not the header: the search field and
-    // the toggle keep answering the moment they are touched.
-    scroll_.offset -= touchScroll(ctx.window, view, scroll_.maxOffset() > 0);
-    scroll_.offset = clamp(scroll_.offset, 0.0, scroll_.maxOffset());
+    // the toggle keep answering the moment they are touched. Skip while the
+    // thumb is held -- that contact already owns the scroll.
+    if (!drag.active) {
+        scroll_.offset -= touchScroll(ctx.window, view, maxScroll > 0);
+    }
+    scroll_.offset = clamp(scroll_.offset, 0.0, maxScroll);
 
     const double originX = panel.x;
     const double originY = view.y - scroll_.offset;
@@ -701,9 +876,17 @@ bool InventoryPanel::render(MenuContext& ctx) {
     // The browser rejects the header strip and then tests every laid-out cell,
     // including one the cull below will not paint, so the hit test is its own
     // pass rather than a side effect of drawing.
+    //
+    // Not while a finger is dragging the grid (gallery's rule): the cell under
+    // it rides with the scroll, and a tip that followed would be noise. A TAP
+    // still hits -- on a phone that is how petal stats are read at all.
+    // Also quiet while the thumb is dragged: the strip is not a petal cell.
     int hovered = -1;
     Rect hoveredRect{};
-    if (panel.contains(mouse) && mouse.y >= view.y) {
+    const bool touchPointer = ctx.window.pointerIsTouch();
+    const bool touchScrolling = ctx.window.touchScrolling();
+    if (panel.contains(mouse) && mouse.y >= view.y && !drag.active &&
+        !(touchPointer && touchScrolling) && !track.contains(mouse)) {
         for (std::size_t i = 0; i < grid.cells.size(); ++i) {
             const Cell& cell = grid.cells[i];
             const Rect rect{originX + cell.rect.x, originY + cell.rect.y, cell.rect.w,
@@ -730,7 +913,7 @@ bool InventoryPanel::render(MenuContext& ctx) {
         label.align = Align::Centre;
         label.baseline = Baseline::Bottom;
         label.fill = rarityColor(section.rarity);
-        const std::string caption = rarityLabel(section.rarity);
+        const std::string caption = rarityTr(section.rarity);
 
         // The heading's outline is 60% black, not solid -- solid reads a whole
         // weight heavier. TextStyle carries no stroke alpha, so the outlined
@@ -783,19 +966,18 @@ bool InventoryPanel::render(MenuContext& ctx) {
     scrollThumb(canvas, panel, view.y, visibleH, grid.contentHeight, scroll_.offset);
 
     // --- tooltip -----------------------------------------------------------
-    // Anchored to the CELL rather than the cursor, and only after the dwell.
-    // A press cancels it: what follows is a drag, and a box under the dragged
-    // petal is the one thing in the way. `mousePressed` as well as `mouseDown`,
-    // because a quick click -- and every tap on a list -- is pressed and
-    // released on one frame and is never seen held.
-    //
-    // A finger never dwells at all. Its pointer only rests where it last
-    // lifted, which after a scroll is on whatever petal happened to slide
-    // under it; the dwell would put that petal's box up after every drag.
+    // Anchored to the CELL rather than the cursor. Mouse: after the dwell, and
+    // a press cancels it (drag starts next). Touch: gallery-style -- show
+    // while the finger rests on a cell and is not pressing, dragging, or
+    // scrolling. Press / drag / click-to-equip are unchanged; the tip is only
+    // painted when those are idle.
     const bool pointerDown = ctx.window.mouseDown(MouseButton::Left) ||
-                             ctx.window.mousePressed(MouseButton::Left) || ctx.drag.active() ||
-                             ctx.window.pointerIsTouch();
-    if (tooltipDelay.update(hovered, ctx.timeSeconds, pointerDown) && hovered >= 0) {
+                             ctx.window.mousePressed(MouseButton::Left) || ctx.drag.active();
+    const bool showTooltip =
+        hovered >= 0 &&
+        (touchPointer ? (!pointerDown && !touchScrolling)
+                      : tooltipDelay.update(hovered, ctx.timeSeconds, pointerDown));
+    if (showTooltip) {
         const Cell& cell = grid.cells[static_cast<std::size_t>(hovered)];
         // The reload the bar would actually run, as the slot wedge times it.
         const double reloadScale =
@@ -803,7 +985,7 @@ bool InventoryPanel::render(MenuContext& ctx) {
             (1.0 - barReloadCut(content(), [&](int i) { return profile.equipped(content(), i); }));
         const std::vector<TooltipLine> lines =
             petalTooltipLines(cell.petalIndex, cell.rarity, profile.skills, reloadScale);
-        const bool alt = ctx.window.altHeld();
+        const bool alt = ctx.altMode;
         const Vec2 size = measureTooltip(lines, 0.0, 0.0, alt);
         const Vec2 at = tooltipAnchor(hoveredRect, size, canvas.width(), canvas.height());
         paintTooltip(canvas, at.x, at.y, lines, 0.0, 0.0, alt);
@@ -832,6 +1014,9 @@ bool InventoryPanel::render(MenuContext& ctx) {
     // Held through a press as well: a drag starts on the press, and the hand
     // flipping back to an arrow the moment a petal is picked up reads as lost.
     if (hovered >= 0) ctx.window.setCursorShape(CursorShape::Hand);
+    if (maxScroll > 0 && (track.contains(mouse) || drag.active)) {
+        ctx.window.setCursorShape(CursorShape::Hand);
+    }
 
     if (ctx.pressed()) {
         // Close and Stack act on PRESS, as the browser's mousedown handler
@@ -847,6 +1032,8 @@ bool InventoryPanel::render(MenuContext& ctx) {
         }
         // The field answered for its own press above.
         if (searchRect.contains(mouse)) return true;
+        // Thumb strip owns the press: do not also pick up a petal under it.
+        if (drag.active || track.contains(mouse)) return true;
         if (hovered >= 0 && !ctx.drag.active()) {
             const Cell& cell = grid.cells[static_cast<std::size_t>(hovered)];
             ctx.drag.source = DragState::Source::Inventory;

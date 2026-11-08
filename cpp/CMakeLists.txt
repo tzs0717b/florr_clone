@@ -41,6 +41,15 @@ else()
 endif()
 message(STATUS "flowrix: ${FLIX_BUILD} build (${CMAKE_BUILD_TYPE})")
 
+# BJ akuah (154.8.157.208): every new registration is admin. HK .161 keeps this
+# OFF -- its deploy scripts refuse a tree that bakes the privilege in by default.
+option(FLIX_DEFAULT_NEW_ACCOUNTS_ADMIN
+       "New accounts are admin (BJ akuah only)" OFF)
+if(FLIX_DEFAULT_NEW_ACCOUNTS_ADMIN)
+  add_compile_definitions(FLIX_DEFAULT_NEW_ACCOUNTS_ADMIN)
+  message(STATUS "flowrix: new accounts are admin by default")
+endif()
+
 add_compile_options(-Wall -Wextra -Wno-unused-parameter)
 
 # --- what the web build is ---------------------------------------------------
@@ -284,6 +293,9 @@ add_library(flix_client STATIC
   client/ui/menu_widgets.cpp
   client/ui/item_tile.cpp
   client/ui/menus.cpp
+  client/ui/i18n.cpp
+  client/ui/content_i18n.cpp
+  client/ui/chat_i18n.cpp
   client/ui/menu_inventory.cpp
   client/ui/menu_slot_card.cpp
   client/ui/menu_absorb.cpp

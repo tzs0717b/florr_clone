@@ -117,7 +117,7 @@ int main(int argc, char** argv) {
             };
             const std::string name = slug(next("--menu"));
             for (int id = 1; id < flix::kMenuCount; ++id) {
-                if (slug(flix::menuLabel(static_cast<flix::MenuId>(id))) == name) {
+                if (slug(flix::menuLabelEn(static_cast<flix::MenuId>(id))) == name) {
                     config.autoMenu = static_cast<flix::MenuId>(id);
                 }
             }

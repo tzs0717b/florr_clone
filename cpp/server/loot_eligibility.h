@@ -36,10 +36,39 @@
 #include "server/squads.h"
 #include "shared/core/entity.h"
 #include "shared/core/types.h"
+#include "shared/core/world.h"
 #include "shared/game/components.h"
 #include "shared/net/protocol.h"
 
 namespace flix {
+
+/// The living flower that currently owns a ledger share.
+///
+/// Prefers the connection (stable across death / title-screen rejoin). Falls
+/// back to the stored body when that body is still a live player -- bots and
+/// harnesses have no connection.
+inline Entity liveContributorBody(World& world, const Bounty::Share& share) {
+    if (share.owner != 0) {
+        Query<PlayerTag, PlayerAccount> flowers{world};
+        Entity found = NULL_ENTITY;
+        flowers.each([&](Entity flower, PlayerTag&, PlayerAccount& account) {
+            if (found == NULL_ENTITY && account.connection == share.owner) found = flower;
+        });
+        if (found != NULL_ENTITY) return found;
+    }
+    if (world.isAlive(share.player) && world.has<PlayerTag>(share.player)) return share.player;
+    return NULL_ENTITY;
+}
+
+/// Copy of `share` with `player` refreshed to the live body when one exists.
+/// Shares whose owner has left keep the stale body so they still burn a loot
+/// slot (nobody is promoted into the gap).
+inline Bounty::Share refreshedShare(World& world, Bounty::Share share) {
+    if (const Entity live = liveContributorBody(world, share); live != NULL_ENTITY) {
+        share.player = live;
+    }
+    return share;
+}
 
 /// How many players may be paid for a mob of this tier.
 ///

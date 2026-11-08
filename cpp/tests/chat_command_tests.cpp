@@ -2083,13 +2083,13 @@ TEST(a_squad_invite_is_refused_when_it_should_be) {
     CHECK(say(h, one, "/squad-invite one"));
     CHECK(sawText(one, "You cannot invite yourself."));
 
-    // A member who is not the leader may not invite, which is the rule a squad
-    // filling itself up from four directions at once would break.
+    // Same-squad invite still refused; a player in another party can be
+    // invited and will switch on accept (covered in squad_tests).
     CHECK(say(h, one, "/squad-invite two"));
     CHECK(say(h, two, "/squad-accept"));
     h.step(3, {&one, &two});
     CHECK(say(h, two, "/squad-invite one"));
-    CHECK(sawText(two, "Only the squad leader can invite players."));
+    CHECK(sawText(two, "That player is already in a squad."));
 
     CHECK(say(h, one, "/squad-invite two"));
     CHECK(sawText(one, "That player is already in a squad."));

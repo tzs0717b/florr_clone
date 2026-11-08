@@ -612,7 +612,7 @@ TEST(the_live_server_grows_what_the_ground_under_each_mob_declares) {
     CHECK_EQ(commonGround + bandedGround + borrowed, mobs);
 }
 
-TEST(respawning_returns_to_the_beginner_ground) {
+TEST(respawning_stands_near_the_corpse) {
     Harness h("spawn-respawn");
     if (!h.ready) { CHECK(false); return; }
 
@@ -626,8 +626,10 @@ TEST(respawning_returns_to_the_beginner_ground) {
     CHECK(body != NULL_ENTITY);
     if (body == NULL_ENTITY) return;
 
-    // Kill the body outright. Death is a component, so this is the same state
-    // combat would leave behind, without waiting for a real fight.
+    // Move far from the door, then die there -- Continue must come back near
+    // this spot (ashflor in-place), not the title-screen spawn.
+    const Vec2 deathSite{1800.0, 1800.0};
+    world.get<Transform>(body).position = deathSite;
     world.get<Health>(body).current = 0.0;
     world.add<Dead>(body, Dead{NULL_ENTITY});
     CHECK(h.stepUntil({&client}, [&] { return client.dead(); }));
@@ -635,7 +637,7 @@ TEST(respawning_returns_to_the_beginner_ground) {
     client.requestRespawn();
     CHECK(h.stepUntil({&client}, [&] {
         const Entity respawned = onlyPlayer(world);
-        return respawned != NULL_ENTITY && !world.has<Dead>(respawned);
+        return respawned != NULL_ENTITY && !world.has<Dead>(respawned) && !client.dead();
     }));
 
     const Entity respawned = onlyPlayer(world);
@@ -643,16 +645,10 @@ TEST(respawning_returns_to_the_beginner_ground) {
     if (respawned == NULL_ENTITY) return;
     const Vec2 at = world.get<Transform>(respawned).position;
 
-    // The whole point: a respawn goes back to the beginner ground, NOT to a
-    // band picked from the player's level and not to the middle of the map.
-    CHECK(inSpawnPoint(overworld(h), "garden", at));
+    // Within findOpenSpawn's 200-unit search (plus a little room for the
+    // nearest-open fallback when the exact cell is blocked).
+    CHECK(distance(at, deathSite) < 400.0);
     CHECK(!onDangerousGround(overworld(h), at));
-    // Not the middle of the map, which is what the bug this test was written
-    // for did. Measured against the map's OWN extent -- every map says its own
-    // size now, and a fixed world constant would stop meaning anything the
-    // moment an author resized the garden.
-    const Vec2 extent = h.server.terrain().realmExtent(Realm::Overworld);
-    CHECK(distance(at, extent * 0.5) > 0.2 * extent.length());
 }
 
 namespace {

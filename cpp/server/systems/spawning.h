@@ -358,7 +358,7 @@ inline constexpr Rarity kAnnouncedRarity = Rarity::Super;
 /// other paths, spends the clock for a boss it places (chargeBossClock), so an
 /// admin's unique counts as that biome's unique for the next cooldown.
 ///
-/// A biome holds at most ONE live unique and ONE live apex, however they got
+/// A biome holds at most one live unique and two live apex, however they got
 /// there. A clock whose tier is already standing in its biome does not roll
 /// at all (it stays ready for when that one dies), and if two ever do stand
 /// in one biome -- an operator's spawn on top of a wild one, say -- the one
@@ -366,8 +366,13 @@ inline constexpr Rarity kAnnouncedRarity = Rarity::Super;
 /// ANIMAL: a centipede's body segments share its tier and are not more of it,
 /// and a player's pets are not wild at all.
 inline constexpr double kUniqueSpawnCooldownMillis = 20.0 * 60.0 * 1000.0;
-inline constexpr double kApexSpawnCooldownMillis = 2.0 * 60.0 * 60.0 * 1000.0;
+// AshFlor BJ: no apex time gate. An upgrade can fill a free slot immediately.
+inline constexpr double kApexSpawnCooldownMillis = 0.0;
 inline constexpr double kBossUpgradeChance = 0.10;
+inline constexpr double kApexUpgradeChance = 0.20;
+inline constexpr double kSewerGarbageApexUpgradeChance = 0.30;
+inline constexpr int kApexBiomeLimit = 2;
+inline constexpr int kJellyfishZoneApexLimit = 3;
 
 /// The sacrifice (petalIsSacrifice): what a flower that dies wearing one
 /// summons, and where it will not.
@@ -762,6 +767,9 @@ private:
         /// than handing the slot back where it fell. See MapElement::singular:
         /// the shape is one creature's range, not a patch of ground.
         bool singular = false;
+        bool worldUnique = false;
+        bool extraApex = false;
+        bool sewerGarbageBoost = false;
         /// Index into bossClocks_: the biome of the map this band is drawn on.
         /// kInvalidIndex on a prestige twin, which keeps no clock.
         std::uint16_t biome = kInvalidIndex;
@@ -911,7 +919,8 @@ private:
     /// of that tier standing, and the upgrade roll lands. Apex is asked first.
     /// Starts nothing -- the clock is only charged once the upgraded mob is
     /// actually standing in the world.
-    Rarity rollBossUpgrade(World& world, const SpawnZone& zone, double nowMillis);
+    Rarity rollBossUpgrade(World& world, const SpawnZone& zone, double nowMillis,
+                           double apexChance);
 
     /// What two realms are compared by when the question is "the same biome":
     /// the biome's clock slot, or the realm itself for a realm no staged map
@@ -921,7 +930,7 @@ private:
     /// True when a live wild `rarity` animal already stands anywhere in
     /// `realm`'s biome. Walks the live population, which is fine: it is only
     /// asked when a clock is ready and a super was just rolled.
-    bool topBossTaken(World& world, Rarity rarity, Realm realm);
+    bool topBossTaken(World& world, Rarity rarity, Realm realm, int limit = 1);
 
     /// Despawns every unique or apex that is not the FIRST of its tier in its
     /// biome, with its body if it has one. Destroyed, not killed: no loot and

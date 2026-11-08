@@ -116,6 +116,32 @@ TEST(mouse_controls_are_on_until_something_turns_them_off) {
     CHECK(settings.useMouseControls);
 }
 
+TEST(movement_helper_is_on_and_invert_flags_are_off_by_default) {
+    const ClientSettings settings;
+    CHECK(settings.movementHelper);
+    CHECK(!settings.invertAttack);
+    CHECK(!settings.invertDefend);
+}
+
+TEST(movement_helper_and_invert_flags_survive_the_settings_file) {
+    const std::string path = tempPath("assist.txt");
+    std::remove(path.c_str());
+
+    ClientSettings written;
+    written.movementHelper = false;
+    written.invertAttack = true;
+    written.invertDefend = true;
+    CHECK(written.save(path));
+
+    ClientSettings read;
+    CHECK(read.load(path));
+    CHECK(!read.movementHelper);
+    CHECK(read.invertAttack);
+    CHECK(read.invertDefend);
+
+    std::remove(path.c_str());
+}
+
 TEST(a_menu_key_no_row_can_rebind_is_not_pinned_by_an_old_settings_file) {
     // Settings, the gallery and the two storefronts have no row in the
     // controls panel, so their keys are constants of the build rather than

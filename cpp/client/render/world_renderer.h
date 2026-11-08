@@ -500,7 +500,7 @@ private:
     double glitchFlowerReach(const MobConfig&, const MobPose&) const;
     /// The garbage mob, whose artwork in mobs.json is an empty document: a
     /// deterministic pile of petals seeded on where it stands.
-    void drawGarbagePile(Canvas&, Vec2 at, double baseSize, double timeSeconds) const;
+    void drawGarbagePile(Canvas&, const MobDraw&, double diameter, double timeSeconds) const;
     /// The eased eye offset a flower-shaped mob looks along. Keyed by netId so
     /// each mob eases on its own.
     ///
@@ -566,6 +566,9 @@ private:
     /// flower still wears its plate there.
     void drawSelfManaBar(Canvas&, const RemoteEntity&, const Camera&, Vec2 at) const;
     void drawCorpse(Canvas&, const RemoteEntity&, const Camera&, Vec2 at, double timeSeconds) const;
+    /// Name only on a downed body (no bar / level). Amber so a revive target
+    /// reads apart from the living white plates. Skips the viewer's own corpse.
+    void drawCorpseName(Canvas&, const RemoteEntity&, const Camera&, Vec2 at) const;
     /// Every live bubble, over the flower that said it. Drawn last of all, on
     /// top of the whole world: a line somebody is saying must not end up
     /// behind a mob that happens to be standing in front of them.

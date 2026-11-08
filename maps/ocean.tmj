@@ -1628,7 +1628,7 @@
                         {
                          "name":"difficulty",
                          "type":"float",
-                         "value":85
+                         "value":136
                         }, 
                         {
                          "name":"mobs",
@@ -2778,7 +2778,7 @@
                         {
                          "name":"difficulty",
                          "type":"float",
-                         "value":95
+                         "value":145
                         }, 
                         {
                          "name":"mobs",
@@ -3574,7 +3574,7 @@
                         {
                          "name":"difficulty",
                          "type":"float",
-                         "value":100
+                         "value":160
                         }],
                  "rotation":0,
                  "type":"",
@@ -3888,7 +3888,7 @@
                         {
                          "name":"difficulty",
                          "type":"float",
-                         "value":95
+                         "value":145
                         }, 
                         {
                          "name":"mobs",

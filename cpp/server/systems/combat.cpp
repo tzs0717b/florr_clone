@@ -7,6 +7,7 @@
 
 #include "server/loot_eligibility.h"
 #include "server/systems/movement.h"
+#include "server/systems/petals.h"
 #include "shared/game/npc.h"
 
 namespace flix {
@@ -306,7 +307,12 @@ void creditSwing(World& world, Entity victim, Entity source, double amount) {
         }
     }
     if (credited == NULL_ENTITY) return;
-    bounty->credit(credited, amount);
+    // Connection keys the ledger across death / title rejoin (Bounty::Share).
+    const net::ConnectionId owner =
+        world.tryGet<PlayerAccount>(credited) != nullptr
+            ? world.get<PlayerAccount>(credited).connection
+            : 0;
+    bounty->credit(credited, amount, owner);
 
     // A swing inside a dungeon is a swing on the nest outside it, by the rule
     // an ambush nest's brood follows below: the nest cannot be hit, and its
@@ -321,7 +327,7 @@ void creditSwing(World& world, Entity victim, Entity source, double amount) {
             !(entrance->broodHealth > 0.0)) {
             return;
         }
-        nestBounty->credit(credited, amount * nestHealth->max / entrance->broodHealth);
+        nestBounty->credit(credited, amount * nestHealth->max / entrance->broodHealth, owner);
         return;
     }
 
@@ -344,7 +350,7 @@ void creditSwing(World& world, Entity victim, Entity source, double amount) {
         !(ambush->broodHealth > 0.0)) {
         return;
     }
-    nestBounty->credit(credited, amount * nestHealth->max / ambush->broodHealth);
+    nestBounty->credit(credited, amount * nestHealth->max / ambush->broodHealth, owner);
 }
 
 /// Which segment of a shared-health chain holds the pool: the one at the FRONT
@@ -591,6 +597,53 @@ bool CombatSystem::canHit(const World& world, Entity victim, Entity source, doub
 
 DamageResult CombatSystem::applyDamage(World& world, Entity victim, Entity source,
                                        double amount, double nowMillis, DamageKind kind) {
+    if (kind != DamageKind::Lightning || resolvingRuby_ || amount <= 0.0 ||
+        world.has<Pet>(victim)) {
+        return applyDamageOnce(world, victim, source, amount, nowMillis, kind);
+    }
+    if (!world.has<MobTag>(victim)) {
+        const Npc* npc = world.tryGet<Npc>(victim);
+        if (npc == nullptr || !npc->cutterPassable) {
+            return applyDamageOnce(world, victim, source, amount, nowMillis, kind);
+        }
+    }
+    const Entity dealer = creditedPlayer(world, source);
+    const PlayerModifiers* modifiers = world.tryGet<PlayerModifiers>(dealer);
+    const double chance = modifiers != nullptr ? modifiers->lightningRepeatChance : 0.0;
+    const int limit = modifiers != nullptr ? std::clamp(modifiers->maxLightningRepeats, 0, 5) : 0;
+    if (chance <= 0.0 || limit == 0) {
+        return applyDamageOnce(world, victim, source, amount, nowMillis, kind);
+    }
+    // Hold the guard across the initial hit too: colony sharing and reflected
+    // damage must not multiply the repeat budget. Never retain ECS pointers
+    // across a hit, which can move both victim and dealer to new archetypes.
+    struct RepeatGuard {
+        bool& flag;
+        explicit RepeatGuard(bool& value) : flag(value) { flag = true; }
+        ~RepeatGuard() { flag = false; }
+    } guard(resolvingRuby_);
+    DamageResult result = applyDamageOnce(world, victim, source, amount, nowMillis, kind);
+    if (result.refused || result.dodged) return result;
+    for (int repeat = 0; repeat < limit && !result.killed; ++repeat) {
+        if (!rubyRng_.chance(clamp(chance, 0.0, 1.0))) break;
+        const DamageResult extra = applyDamageOnce(world, victim, source, amount, nowMillis, kind);
+        if (extra.refused || extra.dodged) break;
+        result.applied += extra.applied;
+        result.killed = extra.killed;
+        if (events_ != nullptr) {
+            const Transform* target = world.tryGet<Transform>(victim);
+            const Transform* origin = world.tryGet<Transform>(source);
+            if (target != nullptr && origin != nullptr) {
+                events_->lightning(origin->position, (target->position - origin->position).length(),
+                                   target->realm, {target->position});
+            }
+        }
+    }
+    return result;
+}
+
+DamageResult CombatSystem::applyDamageOnce(World& world, Entity victim, Entity source,
+                                           double amount, double nowMillis, DamageKind kind) {
     DamageResult result;
     // Non-finite damage reaches here from a config that multiplied a zero by
     // an infinity; it must cost a refused hit, not a NaN health bar that no
@@ -1222,7 +1275,11 @@ void CombatSystem::awardBounty(World& world, Entity victim) {
     // included.
     std::vector<Bounty::Share> shares;
     for (const Bounty::Share& share : bounty->contributors) {
-        if (share.damage > 0.0 && world.has<PlayerTag>(share.player)) shares.push_back(share);
+        if (share.damage <= 0.0) continue;
+        // Refresh the body so a player who died and rejoined still ranks on
+        // the damage they already dealt (connection-keyed ledger).
+        const Bounty::Share live = refreshedShare(world, share);
+        if (world.has<PlayerTag>(live.player)) shares.push_back(live);
     }
     std::stable_sort(shares.begin(), shares.end(),
                      [](const Bounty::Share& a, const Bounty::Share& b) {
@@ -1709,6 +1766,9 @@ bool CombatSystem::healingBlocked(const World& world, Entity entity, double nowM
 void CombatSystem::landHeal(World& world, Entity entity, Health& health, double amount) {
     if (!(amount > 0.0)) return;
     const PlayerModifiers* modifiers = world.tryGet<PlayerModifiers>(entity);
+    // Flowers only: every player heal path lands here. Mob recovery uses the
+    // same entry without PlayerModifiers and stays at authored rates.
+    if (modifiers != nullptr) amount *= kPlayerHealMultiplier;
     // A worn basil grows the heal before the bar sees it, so what spills past
     // max -- and what an amulet keeps of it -- is the grown heal's overflow.
     if (modifiers != nullptr) amount *= 1.0 + modifiers->healBonus;
@@ -2062,13 +2122,14 @@ void CombatSystem::tickGroundEffects(World& world, const SpatialGrid& grid,
         // A strike's burst is a pollen puff in every respect the field pass
         // cares about -- same reach rule, same rim rule, same once-per-victim
         // chip -- and differs only in the colour of the number it reports.
-        const DamageKind hitKind = world.has<LightningBurst>(e) ? DamageKind::Lightning
-                                                                : DamageKind::Direct;
+        const auto* lightning = world.tryGet<LightningBurst>(e);
+        const DamageKind hitKind = lightning ? DamageKind::Lightning : DamageKind::Direct;
         fields_.push_back({e, effect.kind, hitKind, transform.position, effect.radius,
                            effect.damagePerSecond, effect.slowFactor, effect.rarity,
                            effect.damagePerHit, effect.damageIntervalMillis, transform.realm,
                            effect.slowsFlowers, effect.owner, effect.poisonDurationMillis,
-                           effect.ownerPoisonPerSecond});
+                           effect.ownerPoisonPerSecond,
+                           lightning && lightning->energizesCapacitor});
     });
 
     for (const FieldSource& field : fields_) {
@@ -2085,6 +2146,8 @@ void CombatSystem::tickGroundEffects(World& world, const SpatialGrid& grid,
         }
         if (field.damagePerSecond <= 0.0 && field.damagePerHit <= 0.0 &&
             field.slowFactor >= 1.0) continue;
+        Entity followUpTarget = NULL_ENTITY;
+        double nearestHit = std::numeric_limits<double>::infinity();
         queryBodies(grid, field.realm, field.position, field.radius + kBroadphasePad, candidates_);
         for (const Entity victim : candidates_) {
             const Transform* transform = world.tryGet<Transform>(victim);
@@ -2130,6 +2193,11 @@ void CombatSystem::tickGroundEffects(World& world, const SpatialGrid& grid,
                         world.ensure<HitCooldowns>(field.effect)
                             .arm(victim, nowMillis + field.damageIntervalMillis);
                     }
+                    if (field.energizesCapacitor && hit.applied > 0 && !hit.killed &&
+                        gapSq < nearestHit) {
+                        followUpTarget = victim;
+                        nearestHit = gapSq;
+                    }
                 }
             } else if (field.damagePerSecond > 0.0 && field.poisonDurationMillis > 0.0) {
                 // Credited through the field to its owner, as a petal's bite
@@ -2150,6 +2218,47 @@ void CombatSystem::tickGroundEffects(World& world, const SpatialGrid& grid,
                           field.rarity, nowMillis);
             }
         }
+        if (followUpTarget != NULL_ENTITY) {
+            dischargeCapacitorFollowUp(world, content, field, followUpTarget, nowMillis);
+        }
+    }
+}
+
+void CombatSystem::dischargeCapacitorFollowUp(World& world, const ContentRegistry& content,
+                                             const FieldSource& field, Entity victim,
+                                             double nowMillis) {
+    auto* slots = world.tryGet<PetalSlotState>(field.owner);
+    const auto* loadout = world.tryGet<Loadout>(field.owner);
+    if (!slots || !loadout || world.has<Dead>(field.owner) ||
+        nowMillis < slots->nextCapacitorSynergyMillis) return;
+
+    const std::uint16_t capacitor = content.petalIndex("capacitor");
+    double strength = 0;
+    Vec2 origin;
+    for (const Entity petal : loadout->spawned) {
+        const auto* instance = world.tryGet<PetalInstance>(petal);
+        if (!instance || instance->configIndex != capacitor || world.has<Dead>(petal)) continue;
+        const auto* transform = world.tryGet<Transform>(petal);
+        if (!transform || transform->realm != field.realm) continue;
+        const double scale = petalStrengthScale(instance->rarity);
+        if (scale <= strength) continue;
+        strength = scale;
+        origin = transform->position;
+    }
+    if (strength <= 0) return;
+    const auto* target = world.tryGet<Transform>(victim);
+    if (!target) return;
+    const Vec2 at = target->position;
+    const auto* modifiers = world.tryGet<PlayerModifiers>(field.owner);
+    const double talent = modifiers ? modifiers->petalDamageScale : 1.0;
+    const auto* tree = world.tryGet<PlayerSkillTree>(field.owner);
+    slots->nextCapacitorSynergyMillis = nowMillis + capacitorCooldownMillis(
+        kCapacitorSynergyCooldownMillis, tree ? tree->skills.reloadScale() : 1.0);
+    const DamageResult hit = applyDamage(world, victim, field.effect,
+                                         kCapacitorSynergyDamage * strength * talent,
+                                         nowMillis, DamageKind::Lightning);
+    if (events_ && hit.applied > 0) {
+        events_->lightning(origin, (at - origin).length(), field.realm, {at});
     }
 }
 
@@ -2504,6 +2613,10 @@ void CombatSystem::resolveMelee(World& world, const SpatialGrid& grid, double no
                                           world.has<Health>(victim) &&
                                           canDamage(world, source.attacker, victim);
             if (mobTouchesPlayer) {
+                const auto* worn = world.tryGet<PlayerModifiers>(victim);
+                const auto* npc = source.isNpcBody ? world.tryGet<Npc>(source.attacker) : nullptr;
+                const bool phase = worn && worn->passThroughMobs &&
+                    (source.isMobBody || (npc && npc->cutterPassable));
                 // resolvePlayerMobContact() breaks after its first collision:
                 // one flower wedged in a pile takes one hit/bump per tick, not
                 // a full stack. Preserve that rule across C++'s source-first
@@ -2518,14 +2631,14 @@ void CombatSystem::resolveMelee(World& world, const SpatialGrid& grid, double no
                 // -- a ladybug shoved across the map by a flower leaning on it.
                 if (firstBump) {
                     mobContactedPlayers_.push_back(victim);
-                    bounceOffMob(world, terrain, victim, source.attacker, source.givesWay, offset,
+                    if (!phase) bounceOffMob(world, terrain, victim, source.attacker, source.givesWay, offset,
                                  source.radius + body->radius - offset.length());
                 }
                 // Every mob touching the flower recoils, the one-bump rule
                 // notwithstanding: that rule stops a pile stacking shoves on
                 // the FLOWER, and each mob in the pile still hit it.
-                if (source.gardnRecoil) recoilOffFlower(world, source.attacker, victim, offset);
-                if (source.yieldsToFlower) {
+                if (!phase && source.gardnRecoil) recoilOffFlower(world, source.attacker, victim, offset);
+                if (!phase && source.yieldsToFlower) {
                     yieldToFlower(world, terrain, source.attacker, victim, offset,
                                   source.radius + body->radius - offset.length());
                 }

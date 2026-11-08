@@ -375,12 +375,12 @@ using Shape = SkinShape;
 
 const char* shortType(ShapeType t) {
     switch (t) {
-        case ShapeType::Circle: return "Circle";
-        case ShapeType::Ellipse: return "Ellipse";
-        case ShapeType::Rect: return "Rect";
-        case ShapeType::Polygon: return "Polygon";
-        case ShapeType::Curve: return "Curve";
-        default: return "Line";
+        case ShapeType::Circle: return tr(Msg::SkinShapeCircle);
+        case ShapeType::Ellipse: return tr(Msg::SkinShapeEllipse);
+        case ShapeType::Rect: return tr(Msg::SkinShapeRect);
+        case ShapeType::Polygon: return tr(Msg::SkinShapePolygon);
+        case ShapeType::Curve: return tr(Msg::SkinShapeCurve);
+        default: return tr(Msg::SkinShapeLine);
     }
 }
 
@@ -528,10 +528,17 @@ Layout layoutOf(Rect panel) {
     return out;
 }
 
-/// The Browse tab has no footer: under its sort row, its cards run to the
-/// card's own bottom pad.
+Rect browseSearch(const Layout& l) {
+    return {l.body.x, l.tabs.bottom() + 7.0, l.body.w, 28.0};
+}
+
+/// The Browse tab's sort row, under its search field.
+double sortRowY(const Layout& l) { return browseSearch(l).bottom() + 8.0; }
+
+/// The Browse tab has no footer: under its search field and sort row, its
+/// cards run to the card's own bottom pad.
 Rect browseBody(const Layout& l) {
-    const double top = l.tabs.bottom() + 12.0 + kSortHeight + 10.0;
+    const double top = sortRowY(l) + kSortHeight + 10.0;
     return {l.body.x, top, l.body.w, std::max(0.0, l.panel.bottom() - kPad - top)};
 }
 
@@ -613,6 +620,8 @@ struct Studio {
 
     Scroller shapeScroll;
     Scroller browseScroll;
+    std::string browseQuery;
+    TextFieldState browseField;
 
     bool dragging = false;
     HandleKind dragHandle = HandleKind::Anchor;
@@ -963,7 +972,8 @@ double Studio::drawPalette(Canvas& canvas, Rect r, const char* caption,
 void Studio::drawTabs(Canvas& canvas, Vec2 mouse) {
     const Rect row = layout.tabs;
     // The first tab says which it is doing: a new skin, or one of yours.
-    const char* const labels[] = {editingId.empty() ? "Create" : "Editing", "Browse"};
+    const char* const labels[] = {editingId.empty() ? tr(Msg::CreateTab) : trEnZh("Editing", "编辑中"),
+                                  tr(Msg::BrowseTab)};
     for (int i = 0; i < 2; ++i) {
         const Rect r{row.x + i * (kTabWidth + kTabGap), row.y, kTabWidth, row.h};
         const bool active = static_cast<int>(tab) == i;
@@ -981,13 +991,13 @@ void Studio::drawTabs(Canvas& canvas, Vec2 mouse) {
         Action mode;
         mode.k = Act::TextMode;
         const Rect r{row.right() - 110.0, row.y, 110.0, row.h};
-        actionButton(canvas, r, textMode ? "Visual editor" : "Text editor", mode,
+        actionButton(canvas, r, textMode ? tr(Msg::SkinVisualEditor) : tr(Msg::SkinTextEditor), mode,
                      textMode ? kAccentPurple : kNeutralFill);
     } else {
         Action unequip;
         unequip.k = Act::Unequip;
         const Rect r{row.right() - 110.0, row.y, 110.0, row.h};
-        actionButton(canvas, r, "Unequip", unequip, kNeutralFill);
+        actionButton(canvas, r, tr(Msg::SkinUnequip), unequip, kNeutralFill);
     }
 }
 
@@ -1055,7 +1065,7 @@ void Studio::drawPreview(Canvas& canvas) {
     }
     canvas.restore();
 
-    ui::text(canvas, textMode ? "Live preview" : "Drag the handles to shape it",
+    ui::text(canvas, textMode ? tr(Msg::SkinLivePreview) : tr(Msg::SkinDragHandles),
              pr.x + pr.w / 2, pr.bottom() + 12.0, label(kCaptionSize, Align::Centre));
 }
 
@@ -1128,11 +1138,10 @@ void Studio::drawShapeList(Canvas& canvas, Rect view) {
 }
 
 void Studio::drawProps(Canvas& canvas, Rect r, double timeSeconds) {
-    ui::text(canvas, "Selected shape", r.x, r.y + 7.0, label(kSectionSize));
+    ui::text(canvas, tr(Msg::SkinSelectedShape), r.x, r.y + 7.0, label(kSectionSize));
     const Shape* s = selectedShape();
     if (!s) {
-        ui::text(canvas, "Nothing selected \xe2\x80\x94 add a shape below.", r.x, r.y + 30.0,
-                 label(kBodySize));
+        ui::text(canvas, tr(Msg::SkinNothingSelected), r.x, r.y + 30.0, label(kBodySize));
         return;
     }
 
@@ -1145,17 +1154,17 @@ void Studio::drawProps(Canvas& canvas, Rect r, double timeSeconds) {
     std::vector<Row> rows;
     rows.push_back({"X", Field::X, s->x, 1});
     rows.push_back({"Y", Field::Y, s->y, 1});
-    if (s->t == ShapeType::Circle) rows.push_back({"Radius", Field::R, s->r, 1});
+    if (s->t == ShapeType::Circle) rows.push_back({tr(Msg::SkinRadius), Field::R, s->r, 1});
     if (s->t == ShapeType::Ellipse || s->t == ShapeType::Rect) {
-        rows.push_back({"Width", Field::Rx, s->rx, 1});
-        rows.push_back({"Height", Field::Ry, s->ry, 1});
+        rows.push_back({tr(Msg::SkinWidth), Field::Rx, s->rx, 1});
+        rows.push_back({tr(Msg::SkinHeight), Field::Ry, s->ry, 1});
     }
     // Lines and curves are authored by dragging absolute endpoints, which the
     // handles report unrotated -- so no rotation control for those.
     if (s->t != ShapeType::Line && s->t != ShapeType::Curve) {
-        rows.push_back({"Rotation", Field::Rot, s->rot, 15});
+        rows.push_back({tr(Msg::SkinRotation), Field::Rot, s->rot, 15});
     }
-    rows.push_back({"Outline width", Field::Sw, s->sw, 1});
+    rows.push_back({tr(Msg::SkinOutlineWidth), Field::Sw, s->sw, 1});
 
     constexpr double kStepperH = 40.0;
     constexpr double kStepperGap = 8.0;
@@ -1173,26 +1182,24 @@ void Studio::drawProps(Canvas& canvas, Rect r, double timeSeconds) {
     if (s->t == ShapeType::Polygon) {
         Action add;
         add.k = Act::AddVertex;
-        actionChip(canvas, {r.x, cy, 96.0, 24.0}, "Add point", add, kRowFill, kBodySize);
+        actionChip(canvas, {r.x, cy, 96.0, 24.0}, tr(Msg::SkinAddPoint), add, kRowFill, kBodySize);
         Action del;
         del.k = Act::DelVertex;
-        actionChip(canvas, {r.x + 104.0, cy, 96.0, 24.0}, "Remove point", del, kRowFill,
+        actionChip(canvas, {r.x + 104.0, cy, 96.0, 24.0}, tr(Msg::SkinRemovePoint), del, kRowFill,
                    kBodySize);
         cy += 32.0;
     }
 
     if (s->t == ShapeType::Curve) {
-        ui::text(canvas, "Drag the two round handles to bend it;", r.x, cy + 8.0,
-                 label(kCaptionSize));
-        ui::text(canvas, "a fill closes the curve into a blob.", r.x, cy + 22.0,
-                 label(kCaptionSize));
+        ui::text(canvas, tr(Msg::SkinCurveHint1), r.x, cy + 8.0, label(kCaptionSize));
+        ui::text(canvas, tr(Msg::SkinCurveHint2), r.x, cy + 22.0, label(kCaptionSize));
         cy += 34.0;
     }
 
     if (s->t != ShapeType::Line) {
-        cy = drawPalette(canvas, {r.x, cy, r.w, 0}, "Fill", s->fill, true);
+        cy = drawPalette(canvas, {r.x, cy, r.w, 0}, tr(Msg::SkinFill), s->fill, true);
     }
-    cy = drawPalette(canvas, {r.x, cy, r.w, 0}, "Outline", s->stroke, false);
+    cy = drawPalette(canvas, {r.x, cy, r.w, 0}, tr(Msg::SkinOutline), s->stroke, false);
 
     syncPicker();
     if (const std::string* colour = pickerColour()) {
@@ -1335,7 +1342,7 @@ void Studio::drawTextEditor(Canvas& canvas, Rect r, double timeSeconds) {
 
 void Studio::drawCommandHelp(Canvas& canvas, Rect r) {
     double hy = r.y + 8.0;
-    ui::text(canvas, "Canvas commands", r.x, hy, label(kSectionSize));
+    ui::text(canvas, tr(Msg::SkinCanvasCommands), r.x, hy, label(kSectionSize));
     hy += 20.0;
     static const char* const kHelp[] = {
         "One shape per line:",
@@ -1378,7 +1385,8 @@ void Studio::drawCommandHelp(Canvas& canvas, Rect r) {
 void Studio::drawFooter(Canvas& canvas, double timeSeconds) {
     const Rect r = layout.footer;
     const Rect field = footerNameField(r);
-    inputField(canvas, field, skinName, "Skin name", nameField.focused, timeSeconds, &nameField);
+    inputField(canvas, field, skinName, tr(Msg::SkinNamePlaceholder), nameField.focused,
+               timeSeconds, &nameField);
 
     // Editing, the two become the way out of the edit and the save over the
     // skin being edited. Reset has no place there: the way back to the skin
@@ -1387,16 +1395,17 @@ void Studio::drawFooter(Canvas& canvas, double timeSeconds) {
     Action reset;
     reset.k = editing ? Act::StopEdit : Act::Reset;
     actionButton(canvas, {r.right() - kPublishW - kResetW - 8.0, r.y, kResetW, r.h},
-                 editing ? "Stop editing" : "Reset", reset, kNeutralFill);
+                 editing ? trEnZh("Stop editing", "停止编辑") : tr(Msg::SkinReset), reset, kNeutralFill);
     Action publish;
     publish.k = Act::Publish;
     actionButton(canvas, {r.right() - kPublishW, r.y, kPublishW, r.h},
-                 editing ? "Save changes" : "Publish", publish, kAccent);
+                 editing ? trEnZh("Save changes", "保存修改") : tr(Msg::SkinPublish), publish, kAccent);
 }
 
 void Studio::drawSortRow(Canvas& canvas) {
-    static const char* const kLabels[] = {"Newest", "Top rated", "Favorites"};
-    const double y = layout.tabs.bottom() + 12.0;
+    const char* const kLabels[] = {trEnZh("Newest", "最新"), trEnZh("Top rated", "最高评分"),
+                                   trEnZh("Favorites", "收藏")};
+    const double y = sortRowY(layout);
     for (int i = 0; i < 3; ++i) {
         Action pick;
         pick.k = Act::Sort;
@@ -1405,7 +1414,7 @@ void Studio::drawSortRow(Canvas& canvas) {
                    kLabels[i], pick, static_cast<int>(sort) == i ? kAccentPurple : kNeutralFill,
                    kBodySize);
     }
-    ui::text(canvas, "Equip one and everyone sees it.",
+    ui::text(canvas, trEnZh("Equip one and everyone sees it.", "装备后所有人都能看到。"),
              layout.body.x + 3 * (kSortWidth + kTabGap) + 8.0, y + kSortHeight * 0.5,
              label(kBodySize));
 }
@@ -1434,12 +1443,14 @@ void Studio::drawVoteRow(Canvas& canvas, Rect r, const CustomSkin& skin) {
 
 void Studio::drawBrowse(Canvas& canvas, const std::string& me, double timeSeconds) {
     drawSortRow(canvas);
+    inputField(canvas, browseSearch(layout), browseQuery,
+               trEnZh("Search skin name or creator", "搜索皮肤名或作者"),
+               browseField.focused && !confirming, timeSeconds, &browseField);
 
     const Rect view = browseBody(layout);
     const std::vector<CustomSkin>& skins = catalog();
     if (skins.empty()) {
-        ui::text(canvas, "Nothing published yet. Make one in the Create tab.", view.x,
-                 view.y + 24.0, label(kBodySize));
+        ui::text(canvas, tr(Msg::SkinBrowseEmpty), view.x, view.y + 24.0, label(kBodySize));
         return;
     }
 
@@ -1455,13 +1466,20 @@ void Studio::drawBrowse(Canvas& canvas, const std::string& me, double timeSecond
 
     std::vector<const CustomSkin*> sorted;
     sorted.reserve(skins.size());
+    const std::string query = lowerCase(trimmed(browseQuery));
     for (const CustomSkin& skin : skins) {
         if (sort == Sort::Favorites && !(net && net->isFavoriteSkin(skin.id))) continue;
-        sorted.push_back(&skin);
+        if (query.empty() || lowerCase(skin.name).find(query) != std::string::npos ||
+            lowerCase(skin.author).find(query) != std::string::npos)
+            sorted.push_back(&skin);
     }
     if (sorted.empty()) {
-        ui::text(canvas, "No favorites yet. Press the star on a skin to keep it here.", view.x,
-                 view.y + 24.0, label(kBodySize));
+        browseScroll = {};
+        ui::text(canvas,
+                 !query.empty() ? trEnZh("No matching skins", "没有匹配的皮肤")
+                                : trEnZh("No favorites yet. Press the star on a skin to keep it here.",
+                                         "还没有收藏。点皮肤上的星标即可收藏。"),
+                 view.x, view.y + 24.0, label(kBodySize));
         return;
     }
     // Top rated is the net score, then the plainer favourite of two that tie
@@ -1514,7 +1532,7 @@ void Studio::drawBrowse(Canvas& canvas, const std::string& me, double timeSecond
 
         ui::text(canvas, clipChars(skin.name, 14), card.x + cardW * 0.5, board.bottom() + 14.0,
                  label(kBodySize, Align::Centre));
-        ui::text(canvas, "by " + clipChars(skin.author, 14), card.x + cardW * 0.5,
+        ui::text(canvas, std::string(tr(Msg::SkinBy)) + clipChars(skin.author, 14), card.x + cardW * 0.5,
                  board.bottom() + 30.0, label(kCaptionSize, Align::Centre));
         const double actionsY = card.bottom() - 32.0;
         const double toolsY = actionsY - 6.0 - kToolRowH;
@@ -1553,10 +1571,10 @@ void Studio::drawBrowse(Canvas& canvas, const std::string& me, double timeSecond
         equip.id = skin.id;
         const Rect equipRect{card.x+8.0,actionsY,equipW,24.0};
         if(canEquipSignatureSkin(skin.id,me)) {
-            actionButton(canvas,equipRect,equipped?"Equipped":"Equip",equip,
+            actionButton(canvas,equipRect,equipped?tr(Msg::SkinEquipped):tr(Msg::SkinEquip),equip,
                          equipped?kAccent:kAccentPurple,kBodySize);
         } else {
-            ui::button(canvas,equipRect,"Exclusive",false,true,buttonStyle(kNeutralFill,kBodySize));
+            ui::button(canvas,equipRect,trEnZh("Exclusive", "专属"),false,true,buttonStyle(kNeutralFill,kBodySize));
         }
         if (canDelete) {
             Action del;
@@ -1581,8 +1599,13 @@ void Studio::drawConfirm(Canvas& canvas, Vec2 mouse) {
     const Rect box{layout.panel.x + (layout.panel.w - 320.0) * 0.5,
                    layout.panel.y + (layout.panel.h - 116.0) * 0.5, 320.0, 116.0};
     panelCard(canvas, box, kSkinsSkin);
-    ui::text(canvas, "Delete \"" + clipChars(confirmName, 22) + "\"?", box.x + box.w * 0.5,
-             box.y + 38.0, label(kSectionSize, Align::Centre));
+    {
+        char ask[96];
+        std::snprintf(ask, sizeof ask, tr(Msg::SkinDeleteAsk),
+                      clipChars(confirmName, 22).c_str());
+        ui::text(canvas, ask, box.x + box.w * 0.5, box.y + 38.0,
+                 label(kSectionSize, Align::Centre));
+    }
 
     constexpr double kBtnW = 116.0, kBtnH = 30.0;
     const double by = box.bottom() - kBtnH - 18.0;
@@ -1591,13 +1614,13 @@ void Studio::drawConfirm(Canvas& canvas, Vec2 mouse) {
 
     Action no;
     no.k = Act::CancelDelete;
-    ui::button(canvas, cancel, "Cancel", cancel.contains(mouse), false,
+    ui::button(canvas, cancel, tr(Msg::SkinCancel), cancel.contains(mouse), false,
                buttonStyle(kNeutralFill));
     addRegion(cancel, no);
 
     Action yes;
     yes.k = Act::ConfirmDelete;
-    ui::button(canvas, accept, "Delete", accept.contains(mouse), false,
+    ui::button(canvas, accept, tr(Msg::SkinDelete), accept.contains(mouse), false,
                buttonStyle(kDangerFill));
     addRegion(accept, yes);
 }
@@ -1612,7 +1635,7 @@ void Studio::draw(MenuContext& ctx) {
     const Rect panel = layout.panel;
     regionClip = panel;
     panelCard(canvas, panel, kSkinsSkin);
-    panelHeading(canvas, panel, "Skin Studio");
+    panelHeading(canvas, panel, tr(Msg::SkinStudio));
 
     const Rect closeRect = closeButtonRect(panel);
     ui::panelClose(canvas, closeRect, closeRect.contains(mouse));
@@ -1631,7 +1654,7 @@ void Studio::draw(MenuContext& ctx) {
             drawTextEditor(canvas, layout.right, ctx.timeSeconds);
         } else {
             const double listTop = layout.preview.bottom() + 22.0;
-            ui::text(canvas, "Add shape", layout.left.x, listTop + 7.0,
+            ui::text(canvas, tr(Msg::SkinAddShape), layout.left.x, listTop + 7.0,
                      label(kSectionSize));
 
             // Two rows of three; six types do not fit legibly on one.
@@ -1963,6 +1986,7 @@ bool Studio::dispatch(MenuContext& ctx, const Action& a) {
     // clicking off a DOM input does. The box itself never reaches here: it
     // answers for its own press in trackTextMouse.
     nameField.blur();
+    browseField.blur();
 
     switch (a.k) {
         case Act::Close:
@@ -2161,6 +2185,23 @@ bool Studio::handleInput(MenuContext& ctx) {
     if (tab != Tab::Create || textMode || pickerHex.w <= 0) hexField.blur();
     const bool naming = tab == Tab::Create && !textMode && nameField.focused;
     const bool editing = tab == Tab::Create && textMode;
+    if (tab == Tab::Browse && !confirming) {
+        const Rect field = browseSearch(layout);
+        trackTextMouse(ctx.window, browseField, field,
+                       inputFieldRun(field, browseQuery, browseField), browseQuery, ctx.timeSeconds);
+        if (insideInclusive(field, mouse)) ctx.window.setCursorShape(CursorShape::Text);
+        if (browseField.focused) {
+            ctx.wantsText = true;
+            TextEditOptions options;
+            options.maxBytes = 96;
+            if (editText(ctx.window, browseQuery, browseField, ctx.timeSeconds, options)) {
+                browseScroll.offset = 0;
+                regions.clear();
+            }
+            if (ctx.window.keyPressed(Key::Escape) || ctx.window.keyPressed(Key::Enter))
+                browseField.blur();
+        }
+    }
     const bool hexing = hexField.focused;
     if (naming || editing || hexing) ctx.wantsText = true;
 
@@ -2291,6 +2332,7 @@ void SkinsPanel::reset() {
     Studio& state = studio();
     state.nameField.blur();
     state.hexField.blur();
+    state.browseField.blur();
     state.textField.dragging = false;
     state.dragging = false;
     state.pickerDrag = Studio::PickerDrag::None;

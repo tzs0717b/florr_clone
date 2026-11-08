@@ -908,7 +908,7 @@ private:
     /// and reports `desired` and `facing` as steerAggressive does. False when
     /// the target has no position, with the target cleared. Shared by the wild
     /// mob and the pet, which differ only in how they pick what to chase.
-    bool pursueTarget(World& world, Entity self, const MobType& type, const Transform& transform,
+    bool pursueTarget(World& world, const Terrain& terrain, Entity self, const MobType& type, const Transform& transform,
                       const Body& body, MobAi& ai, const Drive& drive, double chaseSpeed,
                       double nowMillis, double dt, Vec2& desired, Vec2& facing,
                       CommandBuffer& commands);
@@ -916,7 +916,7 @@ private:
     /// `bearing`, wild or on a leash: winds the rear round while a volley is
     /// due, fires once it has come round, and recovers otherwise. Returns
     /// where to point this tick. `travel` is what fireVolley hands the shot.
-    Vec2 stingerVolley(World& world, Entity self, const MobType& type, MobAi& ai,
+    Vec2 stingerVolley(World& world, const Terrain& terrain, Entity self, const MobType& type, MobAi& ai,
                        const Drive& drive, const Transform& transform, double bearing,
                        Vec2 travel, double nowMillis, double dt, CommandBuffer& commands);
 
@@ -971,7 +971,7 @@ private:
     /// `desired` vector and only writes it to Motion after this returns, so
     /// reading Motion here would inherit the PREVIOUS tick's travel -- and on
     /// the tick a mob acquires a target and fires, that is zero.
-    void fireVolley(World& world, Entity shooter, const MobType& type, MobAi& ai,
+    void fireVolley(World& world, const Terrain& terrain, Entity shooter, const MobType& type, MobAi& ai,
                     const Drive& drive, Vec2 from, double aimAngle, Vec2 shooterVelocity,
                     double nowMillis, CommandBuffer& commands);
 
@@ -992,7 +992,7 @@ private:
     /// A pet's volley at `ai.target` from where it stands, without closing on
     /// it: the ownerless pet's and the cursor-driven one's. Returns where a
     /// stinger shooter has to point this tick, or zero to face its travel.
-    Vec2 volleyInPlace(World& world, Entity self, const MobType& type, MobAi& ai,
+    Vec2 volleyInPlace(World& world, const Terrain& terrain, Entity self, const MobType& type, MobAi& ai,
                        const Drive& drive, const Transform& transform, Vec2 travel,
                        double nowMillis, double dt, CommandBuffer& commands);
     void steerPet(World& world, const Terrain& terrain, const SpatialGrid& grid, Entity self,

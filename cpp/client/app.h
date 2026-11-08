@@ -238,7 +238,8 @@ private:
     /// choice and for any id no staged map defines.
     std::string pickerTabOf(const std::string& choiceId) const;
     /// The title screen's chat line, bottom-left, under the icon column.
-    static Rect titleChatBox(int viewWidth, int viewHeight);
+    /// Instance (not static): with touch controls up it lifts clear of the stick.
+    Rect titleChatBox(int viewWidth, int viewHeight);
     void drawTitleChat(Canvas&, double time);
     /// The daily-login card, top-right. Painted last, over the panels, exactly
     /// as the browser build's own always-on-top widget is.
@@ -264,6 +265,10 @@ private:
     /// Steps and draws the petals drifting over that texture.
     void drawTitlePetals(Canvas&, double time);
     void drawHud(Canvas&, double time);
+    /// AshFlor 移动辅助: thin aim ray from the flower toward the cursor.
+    /// Over the world, under the HUD. Off when the setting is off or touch
+    /// controls own the pointer.
+    void drawMovementHelper(Canvas&);
     /// The edges of the screen going dark as the flower runs out of health.
     /// Over the world and under the HUD, like the death wash.
     void drawLowHealthVignette(Canvas&);
@@ -276,8 +281,8 @@ private:
     void drawDarkness(Canvas&);
     /// How dark that vignette should be this frame, 0 to 1, before easing.
     double lowHealthTarget() const;
-    /// The screen-top health bars a super, unique or apex mob in view gets,
-    /// one under the other, name above each. Ultras are not bosses: they wear
+    /// Compact screen-top bars for injured supers and unique/apex mobs in view,
+    /// at most two rows (one on small screens). Ultras wear
     /// the ordinary bar under the body like every other mob. Returns the y
     /// under the last row, or 0 when there are none.
     double drawBossBars(Canvas&, bool altHeld);
@@ -323,10 +328,15 @@ private:
     /// whole of the map the flower is standing on fitted into it -- with its
     /// gold border and its map caption.
     void drawMinimap(Canvas&);
+    /// Scrollable online roster under the minimap (name / level / guild / map),
+    /// fed by ServerMessage::OnlineRoster.
+    void drawOnlineRoster(Canvas&);
+    /// Wheel over the roster list; true when the zoom must not also move.
+    bool scrollOnlineRoster();
     /// The maze realm's map: the whole layout rasterised, corridors light and
     /// tinted by depth band, walls dark, with the same player dots the
     /// overworld map draws. Replaces the world minimap inside the maze.
-    void drawMazeMinimap(Canvas&, bool altHeld);
+    void drawMazeMinimap(Canvas&);
     /// The arena realm has no map to show; the reference puts the live
     /// scoreboard in the minimap's corner instead.
     void drawArenaLeaderboard(Canvas&);
@@ -359,8 +369,8 @@ private:
     /// The socket is down and the screen is carrying on without it: dropped,
     /// or being redialled. What puts the banner up.
     bool connectionLost() const;
-    /// Leaves the world for the title screen: what Continue and the exit
-    /// button both do.
+    /// Leaves the world for the title screen: the red exit button (and a
+    /// kicked/replaced session). Death-card Continue respawns in place instead.
     void leaveToTitle();
     /// leaveToTitle's own half: the screen, without telling the server --
     /// for a body the server has already taken out of the world.
@@ -678,6 +688,12 @@ private:
     /// How far the transcript is scrolled back, in pixels off its bottom. Zero
     /// is the resting state: newest line just above the input slot.
     double chatScroll_ = 0;
+    /// Online roster under the minimap: scroll offset and last painted box.
+    double onlineRosterScroll_ = 0;
+    Rect onlineRosterBox_{};
+    /// ALT press toggles exact numbers / spawn bands / rarity glow (default off).
+    /// Minimap other players + names stay always on; unrelated to this flag.
+    bool altMode_ = false;
     /// The last line count drawChat saw, so a line that ARRIVES can put the
     /// box back at the bottom -- which is what the reference's
     /// `scrollTop = scrollHeight` on every message does.

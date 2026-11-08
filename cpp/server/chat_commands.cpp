@@ -317,6 +317,19 @@ void GameServer::sendSystem(net::Connection& connection, const std::string& text
     sendChatTo(connection, net::ChatChannel::System, "System", text);
 }
 
+void GameServer::sendSquadInvite(net::Connection& connection, const std::string& fromUsername,
+                                 bool fromGuild) {
+    ByteWriter w;
+    w.u8(static_cast<std::uint8_t>(net::ServerMessage::SquadInviteReceived));
+    w.str(fromUsername);
+    w.u8(fromGuild ? 1u : 0u);
+    connection.send(w);
+    std::string line = "<span style=\"color: #4fc3f7;\">@" + fromUsername;
+    if (fromGuild) line += " (guild)";
+    line += " has invited you to their squad. Use /squad-accept or /squad-decline.</span>";
+    sendSystem(connection, line);
+}
+
 bool GameServer::effectiveAdmin(const Session& session) const {
     return session.admin || tempAdmins_.count(session.connection) != 0;
 }
@@ -1001,15 +1014,10 @@ void GameServer::runSquadCommand(Session& session, net::Connection& connection,
         }
         if (target.bot()) {
             // A bot has nobody to answer an invitation, so it joins outright.
-            // That is also the ONLY way a squad ever gets one, which is why the
-            // leader test is repeated here rather than left to invite().
+            // Any squadmate may pull one in (same rule as invite()).
             Squad* squad = squads_.forMember(me);
             if (squad == nullptr) {
                 out("You are not in a squad. Use /squad create first.");
-                return;
-            }
-            if (!(squad->leader == me)) {
-                out("Only the squad leader can invite players.");
                 return;
             }
             const std::string wrongBiome =
@@ -1046,9 +1054,7 @@ void GameServer::runSquadCommand(Session& session, net::Connection& connection,
         }
         out("<span style=\"color: #4fc3f7;\">Invite sent to " + argument + ".</span>");
         if (net::Connection* peer = squadConnection(target)) {
-            sendSystem(*peer, "<span style=\"color: #4fc3f7;\">@" + session.username +
-                                  " has invited you to their squad. Use /squad accept or "
-                                  "/squad decline.</span>");
+            sendSquadInvite(*peer, session.username, false);
         }
         return;
     }
@@ -1153,10 +1159,24 @@ void GameServer::runSquadCommand(Session& session, net::Connection& connection,
             }
         }
         std::string squadId;
-        const std::string error = squads_.accept(me, now, squadId);
+        SquadRoster::Departure leftPrevious;
+        const std::string error = squads_.accept(me, now, squadId, &leftPrevious);
         if (!error.empty()) {
             out(error);
             return;
+        }
+        // Accept may have pulled the flower out of another party: tell that
+        // party the same way /squad-leave does, then seat them in the new one.
+        if (leftPrevious.wasMember) {
+            Squad* remaining = squads_.find(leftPrevious.squadId);
+            if (remaining != nullptr) {
+                if (leftPrevious.promoted.valid()) {
+                    sendSquadSystem(*remaining, squadDisplayName(leftPrevious.promoted) +
+                                                    " is now the squad leader.");
+                }
+                sendSquadSystem(*remaining, squadDisplayName(me) + " has left the squad.");
+                broadcastSquadUpdate(*remaining);
+            }
         }
         Squad* squad = squads_.find(squadId);
         if (squad == nullptr) return;

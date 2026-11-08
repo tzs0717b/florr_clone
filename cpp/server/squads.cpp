@@ -100,9 +100,11 @@ std::vector<const Squad*> SquadRoster::publicSquads() const {
 std::string SquadRoster::invite(SquadMemberId from, SquadMemberId to, std::int64_t nowMillis) {
     Squad* squad = forMember(from);
     if (squad == nullptr) return "You are not in a squad.";
-    if (!(squad->leader == from)) return "Only the squad leader can invite players.";
+    // Any member may invite — AshFlor: filling a party from every seat.
     if (squad->full()) return "Squad is full (max 4 players).";
-    if (forMember(to) != nullptr) return "That player is already in a squad.";
+    // Already in *this* squad: refuse. Someone in another party can still be
+    // invited; accept() will pull them across.
+    if (squad->contains(to)) return "That player is already in a squad.";
 
     const auto pending = invites_.find(to.connection);
     if (pending != invites_.end() && pending->second.expiresAtMillis > nowMillis) {
@@ -122,7 +124,8 @@ const Squad* SquadRoster::pendingInviteSquad(SquadMemberId target,
 }
 
 std::string SquadRoster::accept(SquadMemberId target, std::int64_t nowMillis,
-                                std::string& squadIdOut) {
+                                std::string& squadIdOut, Departure* leftPrevious) {
+    if (leftPrevious != nullptr) *leftPrevious = {};
     const auto it = invites_.find(target.connection);
     if (it == invites_.end()) return "No pending invite.";
     if (nowMillis > it->second.expiresAtMillis) {
@@ -136,7 +139,23 @@ std::string SquadRoster::accept(SquadMemberId target, std::int64_t nowMillis,
     Squad* squad = find(squadId);
     if (squad == nullptr) return "Squad no longer exists.";
     if (squad->full()) return "Squad is full.";
-    if (forMember(target) != nullptr) return "You are already in a squad.";
+    if (squad->contains(target)) {
+        squadIdOut = squadId;
+        return {};
+    }
+
+    // Switching parties: leave the old one first. Invite is already consumed,
+    // so leave()'s invite erase is a no-op here.
+    if (Squad* previous = forMember(target); previous != nullptr) {
+        const Departure left = leave(target);
+        if (leftPrevious != nullptr) *leftPrevious = left;
+    }
+
+    // Re-find: leave() may have erased an empty map entry and moved others,
+    // but this squad still had members (the inviters), so its id stays put.
+    squad = find(squadId);
+    if (squad == nullptr) return "Squad no longer exists.";
+    if (squad->full()) return "Squad is full.";
 
     squad->members.push_back(target);
     squadIdOut = squadId;

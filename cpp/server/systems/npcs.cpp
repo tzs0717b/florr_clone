@@ -8,6 +8,10 @@
 
 namespace flix {
 
+namespace {
+constexpr double kAssemblerRecipeMillis = 15.0 * 60.0 * 1000.0;
+}
+
 void NpcSystem::bind(World& world) {
     if (boundWorld_ == &world) return;
     boundWorld_ = &world;
@@ -161,6 +165,7 @@ Entity NpcSystem::spawnNpc(World& world, const Terrain& terrain, const ContentRe
     npc.configIndex = mobIndex;
     npc.rarity = rarity;
     npc.service = config.npc.service;
+    npc.cutterPassable = config.id == "target_dummy";
     npc.home = position;
     npc.nextGlanceMillis = nowMillis;
     // Flies like its mob does when its mob flies like a bee, starting off on
@@ -171,6 +176,7 @@ Entity NpcSystem::spawnNpc(World& world, const Terrain& terrain, const ContentRe
     if (!config.npc.recipes.empty()) {
         npc.recipe = static_cast<std::uint8_t>(
             rng_.below(static_cast<std::uint32_t>(config.npc.recipes.size())));
+        npc.recipeReadyAtMillis = nowMillis + kAssemblerRecipeMillis;
     }
     npc.cruises = !still && config.beeFlight && stats.speed > 0.0;
     const BeeCruiseDrive cruise = beeCruiseDrive(stats.speed, stats.cruiseSpeed);
@@ -205,6 +211,20 @@ void NpcSystem::run(World& world, const Terrain& terrain, const ContentRegistry&
     placeMissing(world, terrain, content, nowMillis);
 
     npcs_->each([&](Entity e, NpcTag&, Npc& npc, Transform& transform) {
+        if (npc.service == NpcService::Assembler && nowMillis >= npc.recipeReadyAtMillis) {
+            const auto count = static_cast<std::uint32_t>(
+                content.mob(npc.configIndex).npc.recipes.size());
+            if (count > 1) {
+                const std::uint32_t next = rng_.below(count - 1);
+                npc.recipe = static_cast<std::uint8_t>(next + (next >= npc.recipe));
+                // Clients receive the recipe in the spawn record. A fresh
+                // network ID replaces that record without moving the machine.
+                if (NetId* id = world.tryGet<NetId>(e); id && netIds) {
+                    id->value = netIds->next();
+                }
+            }
+            npc.recipeReadyAtMillis = nowMillis + kAssemblerRecipeMillis;
+        }
         // Neither moves nor turns: it stands where it was put down, facing
         // where it was put down facing.
         if (npc.still) return;
@@ -226,7 +246,7 @@ void NpcSystem::run(World& world, const Terrain& terrain, const ContentRegistry&
             // point cannot plunge through a thin wall in one go.
             const Vec2 from = transform.position;
             stepCollide(terrain, transform.realm, transform.position, velocity, kMobWallRadius,
-                        net::kTickSeconds);
+                        net::kTickSeconds, true, true);
             // Its eye is on where it is GOING -- the step it actually took, so
             // one sliding along a wall looks along the wall -- and nowhere
             // else, flowers or no flowers. Held on the last bearing through a

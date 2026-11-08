@@ -1179,6 +1179,25 @@ TEST(segments_trail_the_one_ahead_at_their_spacing) {
     CHECK_NEAR(sim.gap(second, first), 40.0, 6.0);
 }
 
+TEST(a_segment_spacing_correction_cannot_jump_through_a_wall) {
+    CHECK(contentReady());
+    Sim sim;
+    constexpr int wallColumn = 10;
+    const double wall = wallColumn * kTileSize;
+    const double y = 12.5 * kTileSize;
+    sim.terrain.setTile(wallColumn, 12, Tile::Solid);
+    const Entity head = sim.spawnMob("centipede", {wall - 20, y});
+    const Entity segment = sim.spawnMob("centipede_body", {wall - 10, y});
+    link(sim, head, NULL_ENTITY, 0);
+    link(sim, segment, head, kTileSize + 60);
+    sim.spawnPlayer({wall - 120, y});
+
+    sim.tickIntent();
+    const Vec2 at = sim.world.get<Transform>(segment).position;
+    CHECK(at.x < wall);
+    CHECK(!sim.terrain.blocked(at, Realm::Overworld));
+}
+
 TEST(a_segment_on_top_of_its_leader_unfolds_instead_of_producing_nan) {
     CHECK(contentReady());
     Sim sim;

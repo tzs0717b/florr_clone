@@ -18,8 +18,10 @@
 // mouse" is wherever the last tap happened to land. Here a deflected stick
 // aims as well as moves, which is the only thing a thumb can say.
 //
-// Added too: the row swap button, the R key's stand-in. Attack and Retract are
-// held, and read as state; this one acts once per press, as the key does.
+// Added too: the R button, the R key's stand-in -- a tap swaps the two loadout
+// rows; a long press arms the preset bank (MenuSystem keeps it sticky after
+// release) so one finger can load a saved loadout (tap a tile) or save into
+// one (hold a tile). That is ashflor / florr's hold-X on mobile (aqiangei).
 
 #include <cstdint>
 #include <functional>
@@ -53,6 +55,10 @@ inline constexpr double kTouchScale = 2.4;
 /// The floor of the same conversion: a window wider than the design space --
 /// a touch monitor on a desk -- still gets them at no less than design size.
 inline constexpr double kMinTouchScale = 1.0;
+
+/// How long the R button must be held before it opens the preset row instead
+/// of swapping the two loadout rows on release.
+inline constexpr double kSwapLongPressSeconds = 0.35;
 
 // A world finger stays independent of joystick/button fingers on iPad.
 class TouchCursor {
@@ -109,8 +115,9 @@ public:
     bool hits(double x, double y) const;
 
     /// One frame of the touch stream. Contacts that landed on a control are
-    /// bound to it here and followed until they lift.
-    void update(const std::vector<TouchEvent>& events);
+    /// bound to it here and followed until they lift. `timeSeconds` times the
+    /// R button's long press.
+    void update(const std::vector<TouchEvent>& events, double timeSeconds = 0.0);
 
     /// Lets go of every control whose finger is no longer down, given the
     /// window's live set (Window::touches) after the same frame's update().
@@ -144,14 +151,22 @@ public:
     Vec2 attackCentre() const { return attackCentre_; }
     Vec2 retractCentre() const { return retractCentre_; }
     Vec2 rowSwapCentre() const { return rowSwapCentre_; }
+    Vec2 swapCentre() const { return rowSwapCentre_; }
+    /// Answering radius of the stick (drawn radius x slack x layout scale);
+    /// zero before the first layout.
+    double stickHitRadius() const;
 
     bool attackPressed() const { return attack_.held; }
     bool retractPressed() const { return retract_.held; }
     bool rowSwapPressed() const { return rowSwap_.held; }
 
-    /// Whether a finger has landed on the row swap button since the last call.
-    /// Spent by asking, so one press is one swap however long the finger stays.
-    bool takeRowSwap();
+    /// True after a short tap on R (lifted before the long-press threshold).
+    /// Spent by asking, so one tap is one swap.
+    bool consumeSwapRowsTap();
+
+    /// True once R has been held past the long-press threshold and is still
+    /// down -- MenuSystem arms a sticky preset bank from this edge.
+    bool presetsHeld() const { return rowSwap_.held && swapLong_; }
 
     void setAdminCursor(bool enabled) { adminCursor_ = enabled; }
     void draw(Canvas&) const;
@@ -190,8 +205,15 @@ private:
     Contact attack_;
     Contact retract_;
     Contact rowSwap_;
-    /// A press takeRowSwap has not answered for yet.
+    /// A tap consumeSwapRowsTap has not answered for yet.
     bool rowSwapQueued_ = false;
+    double swapDownAt_ = -1.0;
+    bool swapLong_ = false;
+    /// The loadout bar's top edge; the stick's approach pad stops there.
+    double barTop_ = 0.0;
+
+    bool onStick(double x, double y) const;
+    bool onButton(double x, double y) const;
 
     void moveKnob(double x, double y);
 };

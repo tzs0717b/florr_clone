@@ -23,6 +23,7 @@
 #include "client/ui/menu_style.h"
 #include "client/ui/menu_theme.h"
 #include "shared/core/types.h"
+#include "shared/game/skills.h"
 
 namespace flix::ui {
 
@@ -119,6 +120,13 @@ Rect paintTooltip(Canvas&, double x, double y, const std::vector<TooltipLine>&,
 /// cursor: a box that follows the pointer slides around under it and covers
 /// the thing being read.
 Vec2 tooltipAnchor(Rect anchor, Vec2 size, double viewWidth, double viewHeight);
+
+/// Name / tier / description / HP / damage (and the rest of florr's petal
+/// card). Shared by the inventory grid and the loadout bar. `reloadScale` is
+/// the Reload talent times the bar's golden-leaf cut, so the header matches
+/// what the equipped wedge actually times.
+std::vector<TooltipLine> petalTooltipLines(std::uint16_t petalIndex, Rarity rarity,
+                                           const SkillSet& skills, double reloadScale);
 
 /// The 200 ms the browser waits before a tooltip appears, and the mouse-down
 /// that cancels it. One per hoverable grid; `update` is called every frame

@@ -69,6 +69,7 @@ void usage(const char* program) {
         "                     mob_drops.json and the maps (default data)\n"
         "  --db <path>        account database (default inventory.json)\n"
         "  --seed <number>    simulation random seed\n"
+        "  --bots <n>         bot population (0 = off, -1 = auto fill to 14)\n"
 #ifdef __EMSCRIPTEN__
         "  --cert <path>      TLS certificate. Without it, cert.crt then\n"
         "                     dev-cert.crt are looked for in the working\n"
@@ -247,6 +248,7 @@ int main(int argc, char** argv) {
         else if (arg == "--data") config.dataDir = next("--data");
         else if (arg == "--db") config.databasePath = next("--db");
         else if (arg == "--seed") config.worldSeed = std::strtoull(next("--seed"), nullptr, 10);
+        else if (arg == "--bots") config.botCount = std::atoi(next("--bots"));
         else if (arg == "--cert") config.certPath = next("--cert");
         else if (arg == "--key") config.keyPath = next("--key");
         else if (arg == "--web-root") config.webRoot = next("--web-root");

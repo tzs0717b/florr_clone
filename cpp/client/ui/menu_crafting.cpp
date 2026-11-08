@@ -34,6 +34,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 
 #include "client/ui/item_tile.h"
@@ -51,6 +52,7 @@ namespace {
 /// One craft consumes five of a kind. The server enforces the same number; it
 /// is here so the panel can refuse a stack that cannot fill the ring.
 constexpr int kBatch = 5;
+constexpr double kSearchRowHeight = 38.0;
 
 /// The ring: five slots 60 across, 90 out from the slot's centre, the first
 /// straight up.
@@ -91,6 +93,17 @@ constexpr double kRollLossStep = 0.25;
 /// How long the ring waits on an outcome that has not come before it gives
 /// up. The craft resolved server-side either way.
 constexpr double kCraftTimeoutMillis = 8000.0;
+/// Grid hold-to-stage: same cadence as Absorb (menu_absorb.cpp).
+constexpr double kHoldDelayMs = 1000.0;
+constexpr double kHoldRepeatMs = 300.0;
+constexpr double kHoldGrowth = 1.3;
+constexpr std::uint32_t kHoldMaxStep = 1000000;
+/// Gap between Craft and the Craft All toggle.
+constexpr double kCraftButtonGap = 8.0;
+constexpr double kCraftButtonPadX = 13.0;
+constexpr double kCraftButtonLabelSize = 16.0;
+/// Face of the Craft All toggle while it is on (panel accent).
+constexpr std::uint32_t kFillAllOnTint = kCraftingSkin.accent;
 
 /// florr's roll length for crafting `petal` out of `from`, before any loss.
 double rollBaseMillis(const Profile& profile, std::uint16_t petal, Rarity from) {
@@ -172,13 +185,17 @@ double cloverBonus(const Profile& profile, Rarity rarity) {
 Vec2 CraftingPanel::size(const Profile& profile) {
     // Common through unique: nothing upgrades out of apex, so there is no
     // column for it -- the same reason stage() refuses one.
-    return {slotCardWidth(false), slotCardHeight(SlotGrid::rows(profile, false))};
+    return {slotCardWidth(false),
+            std::min(700.0, slotCardHeight(SlotGrid::rows(profile, false)) + kSearchRowHeight)};
 }
 
 void CraftingPanel::reset() {
+    searchField_.blur();
     grid_.reset();
     stagedPetal_ = kNoPetal;
     batches_ = 0;
+    heldPetal_ = kNoPetal;
+    heldStep_ = 1;
     phase_ = Phase::Idle;
     resultPending_ = false;
     spin_ = phaseAngle_ = shake_ = show_ = 0;
@@ -190,7 +207,7 @@ void CraftingPanel::reset() {
 }
 
 void CraftingPanel::stage(const Profile& profile, std::uint16_t petalIndex, Rarity rarity,
-                          bool wholeStack) {
+                          std::uint32_t addBatches) {
     const int possible = ownedCount(profile, petalIndex, rarity) / kBatch;
     if (possible <= 0 || !craftsOutOf(rarity)) return;
 
@@ -199,7 +216,10 @@ void CraftingPanel::stage(const Profile& profile, std::uint16_t petalIndex, Rari
         stagedRarity_ = rarity;
         batches_ = 0;
     }
-    batches_ = wholeStack ? possible : std::min(possible, batches_ + 1);
+    const int add = addBatches == UINT32_MAX
+                        ? possible
+                        : static_cast<int>(std::min(addBatches, static_cast<std::uint32_t>(possible)));
+    batches_ = std::min(possible, batches_ + add);
 }
 
 void CraftingPanel::animate(double dtMs) {
@@ -285,8 +305,9 @@ bool CraftingPanel::render(MenuContext& ctx) {
 
     animate(ctx.dt * 1000.0);
 
-    const SlotCardLayout card =
-        drawSlotCard(canvas, ctx.bounds, kCraftingSkin, "Craft", "Craft", mouse);
+    SlotCardLayout card =
+        drawSlotCard(canvas, ctx.bounds, kCraftingSkin, menuTitle(MenuId::Crafting),
+                     tr(Msg::Craft), mouse);
     const Rect panel = card.panel;
     // florr's old client turns this window over to Absorb with a button in
     // Absorb's purple beside the close button.
@@ -423,15 +444,7 @@ bool CraftingPanel::render(MenuContext& ctx) {
         fx_.drawPopped(canvas, ctx.sprites, card.slot, kResultSlot, ctx.dt * 1000.0, upgradeTile);
     }
 
-    // --- craft button, the odds and the lines ---------------------------------
-    const Rect craftRect = card.button;
-    const bool canCraft = phase_ == Phase::Idle && stagedPetal_ != kNoPetal && batches_ > 0;
-    drawSlotButton(canvas, craftRect, "Craft",
-                   canCraft ? std::optional<std::uint32_t>(rarityColor(upgradeRarity(stagedRarity_)))
-                            : std::nullopt,
-                   craftRect.contains(mouse),
-                   craftRect.contains(mouse) && ctx.window.mouseDown(MouseButton::Left));
-
+    // --- odds and the lines (buttons drawn after the grid, for hover tint) ---
     // A valid craft always has a chance above zero, even if it is a quarter of
     // a percent; a zero means nothing is staged, which reads as "?%".
     std::string odds = "?% success chance";
@@ -449,6 +462,22 @@ bool CraftingPanel::render(MenuContext& ctx) {
     }
 
     // --- the grid ----------------------------------------------------------
+    const Rect searchRect{card.listView.x + 17.0, card.listView.y + 4.0,
+                          card.listView.w - 34.0, 28.0};
+    inputField(canvas, searchRect, search_, trEnZh("Search petals (English / 中文)",
+               "搜索花瓣（中文 / English）"), searchField_.focused, ctx.timeSeconds, &searchField_);
+    trackTextMouse(ctx.window, searchField_, searchRect,
+                   inputFieldRun(searchRect, search_, searchField_), search_, ctx.timeSeconds);
+    if (searchField_.focused) {
+        ctx.wantsText = true;
+        TextEditOptions options;
+        options.maxBytes = 128;
+        if (editText(ctx.window, search_, searchField_, ctx.timeSeconds, options)) grid_.reset();
+        if (ctx.window.keyPressed(Key::Enter) || ctx.window.keyPressed(Key::Escape)) searchField_.blur();
+    }
+    if (searchRect.contains(mouse)) ctx.window.setCursorShape(CursorShape::Text);
+    card.listView.y += kSearchRowHeight;
+    card.listView.h = std::max(0.0, card.listView.h - kSearchRowHeight);
     const std::uint32_t held =
         static_cast<std::uint32_t>(std::max(0, batches_)) * static_cast<std::uint32_t>(kBatch);
     const std::optional<SlotGrid::Pick> hovered = grid_.render(
@@ -466,17 +495,60 @@ bool CraftingPanel::render(MenuContext& ctx) {
             // fresh account.
             if (cell.count > 1) cell.badge = "x" + stackCountText(cell.count);
             return cell;
-        });
+        }, search_);
+
+    // Craft + Craft All toggle side by side, centred on the card's button
+    // anchor. Craft All is a mode, not a one-shot: while on, a click on a
+    // craftable petal stages every available batch (Shift-click's behaviour).
+    const char* craftLabel = tr(Msg::Craft);
+    const char* craftAllLabel = tr(Msg::CraftAll);
+    const double craftW = measure(craftLabel, kCraftButtonLabelSize) + kCraftButtonPadX * 2.0;
+    const double craftAllW = measure(craftAllLabel, kCraftButtonLabelSize) + kCraftButtonPadX * 2.0;
+    const double craftPairW = craftW + kCraftButtonGap + craftAllW;
+    const double craftPairX = card.button.x + card.button.w * 0.5 - craftPairW * 0.5;
+    const Rect craftRect{craftPairX, card.button.y, craftW, card.button.h};
+    const Rect craftAllRect{craftPairX + craftW + kCraftButtonGap, card.button.y, craftAllW,
+                            card.button.h};
+    const bool mouseDown = ctx.window.mouseDown(MouseButton::Left);
+    const bool canCraft = phase_ == Phase::Idle && stagedPetal_ != kNoPetal && batches_ > 0;
+    const auto craftTint =
+        canCraft ? std::optional<std::uint32_t>(rarityColor(upgradeRarity(stagedRarity_)))
+                 : std::nullopt;
+    const auto craftAllTint =
+        fillAllMode_ ? std::optional<std::uint32_t>(kFillAllOnTint) : std::nullopt;
+    drawSlotButton(canvas, craftRect, craftLabel, craftTint, craftRect.contains(mouse),
+                   craftRect.contains(mouse) && mouseDown);
+    // Toggle stays lit while on; hover/press still flash over the face.
+    drawSlotButton(canvas, craftAllRect, craftAllLabel, craftAllTint,
+                   craftAllRect.contains(mouse) || fillAllMode_,
+                   (craftAllRect.contains(mouse) && mouseDown) || fillAllMode_);
 
     // Tiles on their way out go over everything.
     fx_.drawVanishing(canvas, ctx.sprites, ctx.dt * 1000.0);
 
     // --- input -------------------------------------------------------------
+    if (ctx.pressed() && searchRect.contains(mouse)) return true;
+    // Hold-repeat staging: same cadence as Absorb, in batches of five.
+    if (heldPetal_ != kNoPetal) {
+        const bool still = mouseDown && phase_ == Phase::Idle && hovered &&
+                           hovered->petalIndex == heldPetal_ && hovered->rarity == heldRarity_;
+        if (!still) {
+            heldPetal_ = kNoPetal;
+        } else if (nowMs >= heldNextMs_) {
+            stage(profile, heldPetal_, heldRarity_, heldStep_);
+            const double next = std::floor(static_cast<double>(heldStep_) * kHoldGrowth + 1.0);
+            heldStep_ = static_cast<std::uint32_t>(
+                std::clamp(next, 1.0, static_cast<double>(kHoldMaxStep)));
+            heldNextMs_ = nowMs + kHoldRepeatMs;
+        }
+    }
+
     // On press, not release: the browser hit-tests in mousedown, so a press
     // that starts on a cell and drifts off must not still fire.
     const bool rightPressed = panel.contains(mouse) && ctx.window.mousePressed(MouseButton::Right);
     if (phase_ == Phase::Idle && rightPressed) {
         removeBatch();
+        heldPetal_ = kNoPetal;
         return true;
     }
     if (!ctx.pressed() && !rightPressed) return true;
@@ -485,6 +557,43 @@ bool CraftingPanel::render(MenuContext& ctx) {
         switchPressed_ = true;
         return true;
     }
+
+    const auto beginCraft = [&]() {
+        if (phase_ != Phase::Idle || stagedPetal_ == kNoPetal || batches_ <= 0) return;
+        heldPetal_ = kNoPetal;
+        phase_ = Phase::Spinning;
+        phaseStarted_ = ctx.timeSeconds;
+        // Everything staged goes in ONE request, which the server crafts as
+        // a pool and answers with a single result.
+        spinPetal_ = stagedPetal_;
+        spinRarity_ = stagedRarity_;
+        // From the account as it stands before the craft lands.
+        rollBaseMillis_ = rollBaseMillis(profile, stagedPetal_, stagedRarity_);
+        rollMillis_ = rollBaseMillis_;
+        ctx.net.requestCraft(stagedPetal_, stagedRarity_, batches_ * kBatch);
+        // Handed over, so the staging area is empty from here: the ring is
+        // drawing the roll's copy, not something still takeable back.
+        stagedPetal_ = kNoPetal;
+        batches_ = 0;
+    };
+
+    const auto stageAmount = [&]() -> std::uint32_t {
+        return (fillAllMode_ || ctx.window.shiftHeld()) ? UINT32_MAX : 1u;
+    };
+    const auto stageFromGrid = [&](std::uint16_t petal, Rarity rarity) {
+        const std::uint32_t add = stageAmount();
+        stage(profile, petal, rarity, add);
+        // Fill-all lands everything on the first press; hold-repeat is only
+        // for the one-batch mode.
+        if (add == UINT32_MAX) {
+            heldPetal_ = kNoPetal;
+            return;
+        }
+        heldPetal_ = petal;
+        heldRarity_ = rarity;
+        heldNextMs_ = nowMs + kHoldDelayMs;
+        heldStep_ = 1;
+    };
 
     // An outcome stays until the player does something else, florr's way:
     // the upgrade until it is clicked, the survivors of a failure until a
@@ -501,28 +610,17 @@ bool CraftingPanel::render(MenuContext& ctx) {
         }
         if (hovered) {
             phase_ = Phase::Idle;
-            stage(profile, hovered->petalIndex, hovered->rarity, ctx.window.shiftHeld());
+            stageFromGrid(hovered->petalIndex, hovered->rarity);
         }
         return true;
     }
 
     if (craftRect.contains(mouse)) {
-        if (canCraft) {
-            phase_ = Phase::Spinning;
-            phaseStarted_ = ctx.timeSeconds;
-            // Everything staged goes in ONE request, which the server crafts as
-            // a pool and answers with a single result.
-            spinPetal_ = stagedPetal_;
-            spinRarity_ = stagedRarity_;
-            // From the account as it stands before the craft lands.
-            rollBaseMillis_ = rollBaseMillis(profile, stagedPetal_, stagedRarity_);
-            rollMillis_ = rollBaseMillis_;
-            ctx.net.requestCraft(stagedPetal_, stagedRarity_, batches_ * kBatch);
-            // Handed over, so the staging area is empty from here: the ring is
-            // drawing the roll's copy, not something still takeable back.
-            stagedPetal_ = kNoPetal;
-            batches_ = 0;
-        }
+        beginCraft();
+        return true;
+    }
+    if (craftAllRect.contains(mouse)) {
+        fillAllMode_ = !fillAllMode_;
         return true;
     }
 
@@ -530,12 +628,13 @@ bool CraftingPanel::render(MenuContext& ctx) {
         for (const Rect& slot : slots) {
             if (!slot.contains(mouse)) continue;
             removeBatch();
+            heldPetal_ = kNoPetal;
             return true;
         }
     }
 
     if (hovered && phase_ == Phase::Idle) {
-        stage(profile, hovered->petalIndex, hovered->rarity, ctx.window.shiftHeld());
+        stageFromGrid(hovered->petalIndex, hovered->rarity);
     }
     return true;
 }

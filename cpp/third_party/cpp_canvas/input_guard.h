@@ -3,33 +3,25 @@
 // What Window::setInputGuard turns on: the window's defence against input that
 // a program, not a hand, produced.
 //
-// Two rules, both decided as each event arrives:
+// Browser-trusted mouse/touch events retain their original coordinates. The
+// legacy PointerPhysics classifier remains available for diagnostics, but its
+// motion thresholds can also flag real fast or coalesced mouse reports. Those
+// verdicts must never redirect a player's movement or aim.
 //
-//   * A mouse that does not move like a mouse is not believed about where it
-//     is. PointerPhysics, below, judges every sample the way a physical
-//     pointer is bound to behave -- it cannot teleport, it takes time to get
-//     anywhere, it wobbles -- and a sample it cannot vouch for is still
-//     delivered (a press is still a press) but at a random point on the
-//     canvas. Only that one sample: the next is judged afresh. A program can
-//     then click, but it cannot aim. Whether the browser itself says it made
-//     the event (Event.isTrusted) is one input to that judgement, not the
-//     judgement.
-//
-//   * Keys pressed faster than any person types are dropped. That is
-//     KeyRateLimit.
-//
-// Both are plain classes with the clock passed in, so a native test can drive
-// them; window.cpp feeds them from the DOM handlers and applies the verdicts.
-//
-// Neither is an anti-cheat: the page belongs to whoever is running it, and a
-// determined bot can simulate a hand or patch the check out. It raises the
-// cost of the cheap ones -- dispatchEvent, a DevTools Input.dispatchMouseEvent,
-// an OS-level "move to x,y and click" -- and nothing more.
+// Script-created pointer events are still disguised when the guard is on.
+// KeyRateLimit independently drops keys arriving faster than a person types.
+// These checks are client-side friction, not authoritative anti-cheat.
 
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+
+/// Browser-trusted input must retain its device coordinates. Motion heuristics
+/// can flag real coalesced/high-DPI samples and must not redirect gameplay.
+inline bool shouldDisguisePointer(bool guardEnabled, bool browserTrusted) {
+  return guardEnabled && !browserTrusted;
+}
 
 /// A token bucket over fresh key presses, plus a ceiling on auto-repeat.
 ///
@@ -105,8 +97,8 @@ struct PointerSample {
 /// Whether a pointer is moving like a physical mouse or trackpad.
 ///
 /// Every sample gets a verdict of its own, and a sample that is not believed
-/// costs exactly that sample: the caller moves it to a random point and the
-/// next one is judged afresh, from where the device really is. So a rule that
+/// is diagnostic for trusted device input; only scripted events are disguised
+/// by Window. The next sample is judged afresh from where the device really is. So a rule that
 /// misfires on a real hand is one glitched event, never a pointer that stays
 /// random -- and the rules a MOVE is held to are only the ones a hand cannot
 /// break however it is waved about:

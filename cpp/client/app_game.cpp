@@ -9,9 +9,9 @@
 //
 // Death is the other half. The card is a screen of its own (Screen::Dead)
 // rather than a dialog, because everything under it keeps running: the world
-// dims but still draws, the HUD and the panels stay at full brightness, and
-// Close leaves the player dead with the card gone -- its dim and its Enter
-// shortcut with it.
+// dims but still draws, the HUD and the panels stay at full brightness.
+// Continue requests an in-place respawn near the corpse; Close only hides the
+// card (player stays dead) -- its dim and its Enter shortcut go with it.
 
 #include "client/app.h"
 
@@ -21,6 +21,7 @@
 #include <string>
 #include <vector>
 
+#include "client/ui/content_i18n.h"
 #include "client/ui/draw.h"
 #include "client/ui/item_tile.h"
 #include "client/ui/menu_style.h"
@@ -314,8 +315,15 @@ void App::sendInputFrame(double dt) {
     const bool textDrag = selectable.dragging() ||
                           (window_.mousePressed(MouseButton::Left) &&
                            selectable.overTextLastFrame(pointer));
-    if (!chatOpen_ && !menuOpen && !textDrag && !menus_.capturesMouse(pointer) &&
-        !tutorial_.capturesMouse(pointer)) {
+    bool attackHeld = false;
+    bool defendHeld = false;
+    // Desktop combat is quiet while chat or a panel owns the pointer -- and
+    // invert must not turn that quiet into "always attack". Touch buttons sit
+    // outside the guard: they answer for themselves.
+    const bool desktopCombat = !chatOpen_ && !menuOpen && !textDrag &&
+                               !menus_.capturesMouse(pointer) &&
+                               !tutorial_.capturesMouse(pointer);
+    if (desktopCombat) {
         // Pointer actions and explicit admin chords are rechecked against
         // server-held authority and the worn petal.
         if (window_.mouseDown(MouseButton::Left)) input.flags |= net::InputAdminDrag;
@@ -325,26 +333,37 @@ void App::sendInputFrame(double dt) {
         if ((!adminCursor && window_.mouseDown(MouseButton::Left)) ||
             (adminChord == AdminCursorChord::None &&
              boundKeyDown(window_, settings.controlKey(ControlAction::ExtendPetals)))) {
-            input.flags |= net::InputAttack;
+            attackHeld = true;
         }
         if (window_.mouseDown(MouseButton::Right) ||
             (adminChord == AdminCursorChord::None &&
              boundKeyDown(window_, settings.controlKey(ControlAction::RetractPetals)))) {
-            input.flags |= net::InputDefend;
+            defendHeld = true;
         }
     }
-    // Outside that guard on purpose: the two on-screen buttons are their own
-    // contacts and answer for themselves. None of what the guard is about --
-    // a press that landed on a panel, on a line of chat, or on the tutorial
-    // card -- can be true of a finger the stick's own hit test claimed.
     if (touchControls) {
         if (adminCursor) {
             if (adminTouch_.held()) input.flags |= net::InputAdminDrag;
             if (adminTouch_.hasPointer() && mobile_.attackPressed()) input.flags |= net::InputAdminKill;
             if (adminTouch_.hasPointer() && mobile_.retractPressed()) input.flags |= net::InputAdminTeleport;
         } else {
-            if (mobile_.attackPressed()) input.flags |= net::InputAttack;
-            if (mobile_.retractPressed()) input.flags |= net::InputDefend;
+            if (mobile_.attackPressed()) attackHeld = true;
+            if (mobile_.retractPressed()) defendHeld = true;
+        }
+    }
+    // An admin chord in progress is not a swing, inverted or not.
+    if (!chatOpen_ && (desktopCombat || touchControls) &&
+        adminChord == AdminCursorChord::None) {
+        // AshFlor invert: hold = idle/cancel, release = always attack/defend.
+        // Not with the admin Cursor worn: its buttons are KILL / TP and its
+        // left button drags, so "always attack" would fight every grab.
+        const bool invertA = settings.invertAttack && !adminCursor;
+        const bool invertD = settings.invertDefend && !adminCursor;
+        if (invertA ? !attackHeld : attackHeld) {
+            input.flags |= net::InputAttack;
+        }
+        if (invertD ? !defendHeld : defendHeld) {
+            input.flags |= net::InputDefend;
         }
     }
 
@@ -352,10 +371,14 @@ void App::sendInputFrame(double dt) {
 }
 
 void App::updatePlaying(double dt) {
-    // Outside the chat branch below for the reason the other on-screen buttons
-    // are outside sendInputFrame's guard: a finger on a button is not a
-    // keystroke being typed into the chat line.
-    if (mobile_.takeRowSwap()) menus_.requestLoadoutRowSwap();
+    // Mobile R: tap swaps rows; long-press arms a sticky L preset bank (stays
+    // after release for one-finger load/save). Applied before handleKeys so a
+    // same-frame drawLoadoutBar sees the pending swap / bank the way a real
+    // R / L key would.
+    if (touchControlsVisible()) {
+        menus_.noteMobileLoadoutGestures(mobile_.consumeSwapRowsTap(),
+                                         mobile_.presetsHeld());
+    }
 
     // Chat swallows the keyboard while open, or typing would also drive the
     // flower and trip every hotkey.
@@ -391,7 +414,8 @@ void App::updatePlaying(double dt) {
     // The wheel zooms the camera unless a panel -- or the tutorial box, which
     // is a DOM element and eats the event before the canvas -- is over it, and
     // unless the transcript took it to read back through itself.
-    if (!scrollChat() && !menus_.capturesMouse({window_.mouseX(), window_.mouseY()}) &&
+    if (!scrollChat() && !scrollOnlineRoster() &&
+        !menus_.capturesMouse({window_.mouseX(), window_.mouseY()}) &&
         !tutorial_.capturesMouse({window_.mouseX(), window_.mouseY()})) {
         menus_.settings().zoom =
             clamp(menus_.settings().zoom + window_.wheelDelta() * 0.05, kMinZoom, kMaxZoom);
@@ -427,7 +451,9 @@ void App::updateDead(double dt) {
     // painted, and during the slide-in that is on its way down the screen.
     const DeathCard card = deathCardLayout(window_.width(), window_.height(), deathCardSlide_);
     if (hit(card.continueBox, mouse)) {
-        leaveToTitle();
+        // AshFlor-style in-place respawn near the corpse -- not back to the
+        // title lobby. The server answers with Revived so the death card drops.
+        net_.requestRespawn();
         return;
     }
     // Close takes the card away -- it slides back up the way it came -- and
@@ -452,7 +478,7 @@ void App::drawDeathCard(Canvas& canvas, double time) {
     TextStyle line;
     line.align = Align::Centre;
     line.size = kDeathDestroyedBySize;
-    text(canvas, "You were destroyed by:", card.destroyedBy.x, card.destroyedBy.y, line);
+    text(canvas, tr(Msg::YouWereDestroyedBy), card.destroyedBy.x, card.destroyedBy.y, line);
 
     line.size = kDeathKillerSize;
     const std::string killer = net_.killerName().empty()
@@ -469,7 +495,7 @@ void App::drawDeathCard(Canvas& canvas, double time) {
     continueStyle.outlineWidth = kDeathContinueRim;
     continueStyle.radius = kDeathContinueRadius;
     continueStyle.textSize = kDeathContinueTextSize;
-    button(canvas, card.continueBox, "Continue", overContinue, overContinue && pressing,
+    button(canvas, card.continueBox, tipContinue(), overContinue, overContinue && pressing,
            continueStyle);
 
     const bool overClose = hit(card.closeBox, mouse);
@@ -478,7 +504,7 @@ void App::drawDeathCard(Canvas& canvas, double time) {
     closeStyle.outlineWidth = kDeathCloseRim;
     closeStyle.radius = kDeathCloseRadius;
     closeStyle.textSize = kDeathCloseTextSize;
-    button(canvas, card.closeBox, "Close", overClose, overClose && pressing, closeStyle);
+    button(canvas, card.closeBox, tr(Msg::Close), overClose, overClose && pressing, closeStyle);
 }
 
 void App::tallyRunLoot() {
@@ -567,7 +593,7 @@ void App::drawRunLoot(Canvas& canvas, double time) {
     TextStyle title;
     title.size = kRunLootTitleSize;
     title.align = Align::Centre;
-    text(canvas, "Collected this run", left + width * 0.5, top + kRunLootTitleY, title);
+    text(canvas, tr(Msg::CollectedThisRun), left + width * 0.5, top + kRunLootTitleY, title);
 
     for (int row = 0; row < rows; ++row) {
         const int first = row * kRunLootColumns;
@@ -613,6 +639,56 @@ bool App::connectionLost() const {
     // attempt in flight reports Connecting. Testing only the first blinked
     // the banner out for the length of every try.
     return net_.status() == NetClient::Status::Failed || net_.reconnecting();
+}
+
+void App::drawMovementHelper(Canvas& canvas) {
+    // AshFlor Rendering.cc antenna: thin ray from the flower toward the
+    // cursor. Default on; skipped for touch HUD (no meaningful second pointer).
+    if (!menus_.settings().movementHelper) return;
+    if (touchControlsVisible()) return;
+    if (!net_.selfPlaced()) return;
+    if (screen_ != Screen::Playing && screen_ != Screen::Dead) return;
+
+    const Vec2 tip{window_.mouseX(), window_.mouseY()};
+    const Vec2 centre{window_.width() * 0.5, window_.height() * 0.5};
+    const Vec2 delta = tip - centre;
+    const double dist = delta.length();
+
+    double radius = 25.0;
+    const auto& entities = net_.view().entities();
+    const auto it = entities.find(net_.view().self().netId);
+    if (it != entities.end() && it->second.radius > 0.0) {
+        radius = it->second.radius;
+    }
+    const double startR = (radius + 8.0) * camera_.zoom();
+    if (dist <= startR + 4.0) return;
+
+    const Vec2 dir = delta * (1.0 / dist);
+    const Vec2 start = centre + dir * startR;
+    const double ang = std::atan2(dir.y, dir.x);
+    const double c = std::cos(ang);
+    const double s = std::sin(ang);
+
+    auto drawAntenna = [&](std::uint32_t rgb, double alpha, double lw, double head) {
+        setStroke(canvas, rgb, alpha);
+        canvas.setLineWidth(static_cast<float>(lw));
+        canvas.setLineCap("round");
+        canvas.setLineJoin("round");
+        canvas.beginPath();
+        canvas.moveTo(static_cast<float>(start.x), static_cast<float>(start.y));
+        canvas.lineTo(static_cast<float>(tip.x), static_cast<float>(tip.y));
+        const double bx = tip.x - c * head;
+        const double by = tip.y - s * head;
+        const double px = -s * head * 0.55;
+        const double py = c * head * 0.55;
+        canvas.moveTo(static_cast<float>(tip.x), static_cast<float>(tip.y));
+        canvas.lineTo(static_cast<float>(bx + px), static_cast<float>(by + py));
+        canvas.moveTo(static_cast<float>(tip.x), static_cast<float>(tip.y));
+        canvas.lineTo(static_cast<float>(bx - px), static_cast<float>(by - py));
+        canvas.stroke();
+    };
+    drawAntenna(0x000000u, 0.6, 3.5, 16.0);
+    drawAntenna(0xCCCCCCu, 0.73, 2.2, 14.0);
 }
 
 } // namespace flix

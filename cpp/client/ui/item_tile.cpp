@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "client/render/art_cache.h"
+#include "client/ui/content_i18n.h"
 #include "client/ui/draw.h"
 #include "client/ui/menu_widgets.h"
 #include "client/ui/text.h"
@@ -554,7 +555,9 @@ void drawItemTile(Canvas& canvas, const SpriteCache& sprites, Rect rect, const I
     }
 
     if (filled && tile.showName) {
-        const std::string& name = content().petal(tile.petalIndex).name;
+        const PetalConfig& named = content().petal(tile.petalIndex);
+        const std::string enName = titleCase(named.name);
+        const std::string name = petalNameTr(named.id, enName.c_str());
         if (!name.empty()) {
             TextStyle label;
             label.size = kNameSize;

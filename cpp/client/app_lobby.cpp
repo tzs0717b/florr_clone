@@ -25,6 +25,8 @@
 #include "client/app_internal.h"
 #include "client/ease.h"
 #include "client/render/art_cache.h"
+#include "client/ui/content_i18n.h"
+#include "client/ui/i18n.h"
 #include "client/ui/draw.h"
 #include "client/ui/text_input.h"
 #include "shared/game/prestige.h"
@@ -553,9 +555,9 @@ std::vector<App::PickerTab> App::pickerTabs() const {
     // -- which is the order maps.json lists the maps, so the overworld's own
     // doors decide the row and a temporary map never reorders it.
     std::vector<PickerTab> tabs;
-    tabs.push_back(PickerTab{"default", "Default", 0x00BE4Fu, {}});
-    PickerTab arena{kArenaSpawnChoice, "PVP Arena", 0xDC3C3Cu, {}};
-    PickerTab maze{kMazeSpawnChoice, "Maze", 0x573D80u, {}};
+    tabs.push_back(PickerTab{"default", tipDefaultSpawn(), 0x00BE4Fu, {}});
+    PickerTab arena{kArenaSpawnChoice, tipPvpArena(), 0xDC3C3Cu, {}};
+    PickerTab maze{kMazeSpawnChoice, tipMaze(), 0x573D80u, {}};
     for (std::size_t i = 0; i < spawnChoices_.size(); ++i) {
         const SpawnChoice& choice = spawnChoices_[i];
         if (choice.id == kAdminArenaSpawnChoice && !net_.isSkinAdmin()) continue;
@@ -584,7 +586,8 @@ std::vector<App::PickerTab> App::pickerTabs() const {
         if (tab == nullptr) {
             // The tab wears the colour of its first door, which for the
             // overworld's doors is the colour the biome always had.
-            tabs.push_back(PickerTab{biome, titleCaseId(biome), choice.color, {}});
+            const std::string en = titleCaseId(biome);
+            tabs.push_back(PickerTab{biome, biomeTr(biome, en.c_str()), choice.color, {}});
             tab = &tabs.back();
         }
         tab->choices.push_back(i);
@@ -712,7 +715,7 @@ void App::drawLobby(Canvas& canvas, double time) {
     ButtonStyle readyStyle;
     readyStyle.fill = 0x1DD129u;
     readyStyle.textSize = 18.0;
-    button(canvas, layout.ready, "Ready", freeMouse && insideInclusive(layout.ready, mouse),
+    button(canvas, layout.ready, tr(Msg::Ready), freeMouse && insideInclusive(layout.ready, mouse),
            freeMouse && pressedControl_ == "start", readyStyle);
 
     TextStyle label;
@@ -720,10 +723,10 @@ void App::drawLobby(Canvas& canvas, double time) {
     label.align = Align::Centre;
     if (prestigeOn()) {
         label.fill = kPrestigeYellow;
-        text(canvas, std::string("Spawn At (") + kPrestigeLabel + "):", centreX, centreY - 50.0,
+        text(canvas, tr(Msg::SpawnAtPrestige), centreX, centreY - 50.0,
              label);
     } else {
-        text(canvas, "Spawn At:", centreX, centreY - 50.0, label);
+        text(canvas, tr(Msg::SpawnAt), centreX, centreY - 50.0, label);
     }
 
     // The picker: a row of biome tabs, and under it the doors of the open
@@ -755,7 +758,8 @@ void App::drawLobby(Canvas& canvas, double time) {
         const SpawnChoice& choice = spawnChoices_[open->choices[i]];
         const bool chosen = choice.id == menus_.settings().spawnChoice ||
                             (choice.id == "default" && menus_.settings().spawnChoice.empty());
-        pickerButton(layout.doors[i], choice.label, choice.color, chosen,
+        const std::string doorLabel = biomeTr(choice.id, choice.label.c_str());
+        pickerButton(layout.doors[i], doorLabel, choice.color, chosen,
                      "door_" + std::to_string(i));
     }
 
@@ -772,15 +776,17 @@ void App::drawLobby(Canvas& canvas, double time) {
     hint.align = Align::Centre;
     hint.baseline = Baseline::Top;
     const char* lines[] = {
-        "Controls:",
-        "Arrow keys to move",
-        "Hold space to extend petals",
-        "Press Z to open the inventory.",
-        "Click a loadout item to use it.",
-        "Press number keys 1-9 to swap items with secondary loadout",
-        "Press K to switch between mouse and keyboard controls",
-        "Use Q and E to swap petals",
-        "Use T to unequip the selected petal",
+        trEnZh("Controls:", "操作："),
+        trEnZh("Arrow keys to move", "方向键移动"),
+        trEnZh("Hold space to extend petals", "按住空格伸出花瓣"),
+        trEnZh("Press Z to open the inventory.", "按 Z 打开背包。"),
+        trEnZh("Click a loadout item to use it.", "点击配装栏物品以使用。"),
+        trEnZh("Press number keys 1-9 to swap items with secondary loadout",
+               "按数字键 1-9 与副配装交换物品"),
+        trEnZh("Press K to switch between mouse and keyboard controls",
+               "按 K 在鼠标/键盘操控间切换"),
+        trEnZh("Use Q and E to swap petals", "用 Q / E 交换花瓣"),
+        trEnZh("Use T to unequip the selected petal", "用 T 卸下选中的花瓣"),
     };
     // The last two lines name the keys that arm and empty the trash slot,
     // which only the classic bar has. The modern one leaves Q/E/T unbound, so
@@ -857,7 +863,7 @@ void App::drawTitleXpBar(Canvas& canvas, const Rect& track) {
 
     // ALT for the exact figures, as on the in-game bar.
     const LevelProgress progress = levelFromTotalXp(net_.profile().totalXp);
-    const bool altHeld = window_.keyDown(Key::LeftAlt) || window_.keyDown(Key::RightAlt);
+    const bool altHeld = altMode_;
     TextStyle label;
     label.size = std::max(h * kTitleXpTextShare, kTitleXpMinTextSize);
     label.align = Align::Centre;
@@ -978,7 +984,7 @@ void App::drawDailyStreak(Canvas& canvas, double time) {
     text(canvas,
          claimed ? ("Next: " + formatDuration(streak.nextClaimAtMillis - now)) : "Next: now",
          card.x + 12.0, card.y + 100.0, countdown);
-    text(canvas, "Resets: " + formatDuration(streak.streakExpiresAtMillis - now),
+    text(canvas, std::string(tr(Msg::Resets)) + formatDuration(streak.streakExpiresAtMillis - now),
          card.x + 12.0, card.y + 120.0, countdown);
 }
 

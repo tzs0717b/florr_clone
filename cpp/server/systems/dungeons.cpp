@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdio>
 
+#include "server/loot_eligibility.h"
 #include "server/systems/combat.h"
 #include "server/systems/spawning.h"
 #include "shared/game/components.h"
@@ -332,9 +333,10 @@ void DungeonSystem::run(World& world, const Terrain& terrain, const ContentRegis
                 if (const Bounty* bounty = world.tryGet<Bounty>(nest)) {
                     double best = 0.0;
                     for (const Bounty::Share& share : bounty->contributors) {
-                        if (share.damage > best && world.isAlive(share.player)) {
+                        const Entity body = liveContributorBody(world, share);
+                        if (share.damage > best && body != NULL_ENTITY && world.isAlive(body)) {
                             best = share.damage;
-                            killer = share.player;
+                            killer = body;
                         }
                     }
                 }

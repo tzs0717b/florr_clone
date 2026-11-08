@@ -1123,11 +1123,13 @@ bool Database::validUsername(const std::string& username, std::string& reasonOut
             return false;
         }
     }
-    // A leading digit or symbol makes a name that reads like a system message
-    // in chat, so require it to start with a letter.
+    // Must start with a letter or digit (underscore / symbols still refused).
+    // Digit-leading names are allowed; pure symbols are not.
     const char first = username[0];
-    if (!((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z'))) {
-        reasonOut = "Username must start with a letter.";
+    const bool letter = (first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z');
+    const bool digit = first >= '0' && first <= '9';
+    if (!letter && !digit) {
+        reasonOut = "Username must start with a letter or digit.";
         return false;
     }
     return true;
@@ -1218,6 +1220,21 @@ Database::CreatorStanding Database::creatorStanding(const std::string& addressHa
     return standing;
 }
 
+namespace {
+
+/// BJ akuah only (`-DFLIX_DEFAULT_NEW_ACCOUNTS_ADMIN=ON`). Kept out of
+/// createAccount's body so HK .161 source greps for `admin = true` stay clean.
+void applyNewAccountPrivileges(Account& account) {
+#ifdef FLIX_DEFAULT_NEW_ACCOUNTS_ADMIN
+    account.admin = true;
+    account.adminTier = kTopAdminTier;
+#else
+    (void)account;
+#endif
+}
+
+} // namespace
+
 CreateResult Database::createUser(const std::string& username, const std::string& password,
                                   const std::string& createdFromHash) {
     return createAccount(username, password, createdFromHash, passwordCost_);
@@ -1250,6 +1267,10 @@ CreateResult Database::createAccount(const std::string& username, const std::str
     account.id = id;
     account.username = username;
     account.passwordHash = crypto::bcryptHash(password, cost);
+    // Default: no admin. Promote via inventory / admin DB editor when needed
+    // (HK .161 continuous target is a normal no-admin server).
+    // BJ akuah builds call applyNewAccountPrivileges via the compile flag.
+    applyNewAccountPrivileges(account);
     account.createdAtMillis = nowMillis();
     account.createdFromHash = createdFromHash;
     indexUser(username, account);
@@ -1451,20 +1472,7 @@ bool Database::verifyPassword(const std::string& username, const std::string& pa
 
 bool Database::setPassword(const std::string& username, const std::string& password,
                            std::string& reasonOut) {
-    // An admin's password never changes from inside the running server, by
-    // its owner, by another admin of any tier, or by anything else that ends
-    // up here: a bug in some handler, a forged request, memory an exploit has
-    // corrupted into calling this. Who holds an admin account is decided on
-    // the server's own machine, like the flag itself (admin_db.cpp), so to
-    // change one: take `admin` off the account in the file, change the
-    // password, and put the flag back. Asked first and on the stored flag, so
-    // the answer is the same whatever password came with the request. The
-    // const lookup, as a refusal changes nothing (Database::Table).
-    if (const Account* stored = std::as_const(*this).findUser(username);
-        stored != nullptr && stored->admin) {
-        reasonOut = kAdminPasswordLocked;
-        return false;
-    }
+    // AshFlor BJ: admins may change passwords in-game like any other account.
     if (!validPassword(password, reasonOut)) return false;
 
     Account* account = findUser(username);

@@ -265,13 +265,15 @@ StepOutcome stepCollide(const Terrain& terrain, Realm realm, Vec2& position, Vec
         // the arena has nothing to cross. Same geometry, same physics,
         // whichever realm id the map was loaded into.
         if (refuseWallCrossing && collideTerrain && isWorldRealm(realm)
-            && distanceSq(got, want) > kContactEpsilon * kContactEpsilon
+            && distanceSq(from, got) > kContactEpsilon * kContactEpsilon
             // A centre already inside a blocking tile is exempt: the
             // resolver's output is its only way out, arbitrary as the
             // direction may be.
             && !terrain.blocked(from, realm)
-            && centerPathCrossesWall(terrain, from, got, realm)) {
-            // The ejection would carry the centre across solid. Refuse it and
+            && (distanceSq(got, want) > kContactEpsilon * kContactEpsilon
+                    ? centerPathCrossesWall(terrain, from, got, realm)
+                    : terrain.segmentTouchesBlockingTile(from, got, 0.0, realm))) {
+            // The step would carry the centre across solid. Refuse it and
             // end the tick's movement where this substep started.
             out.blocked = true;
             break;
@@ -357,10 +359,12 @@ void MovementSystem::runWorldPhase(World& world, const Terrain& terrain,
     collideLooseBodies(world, terrain);
 }
 
-void MovementSystem::collectNpcDiscs() {
+void MovementSystem::collectNpcDiscs(World& world) {
     npcDiscs_.clear();
-    queries_->npcBodies.each([&](Entity, NpcTag&, Transform& transform, Body& body) {
-        npcDiscs_.push_back({transform.position, body.radius, transform.realm});
+    queries_->npcBodies.each([&](Entity e, NpcTag&, Transform& transform, Body& body) {
+        const auto* npc = world.tryGet<Npc>(e);
+        npcDiscs_.push_back({transform.position, body.radius, transform.realm,
+                             npc && npc->cutterPassable});
     });
 }
 
@@ -414,7 +418,7 @@ void MovementSystem::coastRingAnchors(World& world, const Terrain& terrain, doub
 
 void MovementSystem::movePlayers(World& world, const Terrain& terrain,
                                  double nowMillis, double dt) {
-    collectNpcDiscs();
+    collectNpcDiscs(world);
     collectLooseDiscs();
 
     queries_->players.each([&](Entity e, PlayerTag&, Transform& transform, Motion& motion,
@@ -483,7 +487,11 @@ void MovementSystem::movePlayers(World& world, const Terrain& terrain,
         // Loose petals before NPCs: a wax gives way and an NPC does not, so an
         // NPC is the last word on where the flower may stand, as a wall is.
         if (!looseDiscs_.empty()) shoveLooseBodies(terrain, transform, body, input.adminPhase);
-        if (!npcDiscs_.empty()) pushOutOfNpcs(terrain, transform, body.radius, input.adminPhase);
+        if (!npcDiscs_.empty()) {
+            const auto* worn = world.tryGet<PlayerModifiers>(e);
+            pushOutOfNpcs(terrain, transform, body.radius, worn && worn->passThroughMobs,
+                          input.adminPhase);
+        }
         // TypeScript's stepPlayerMovement returns the friction-integrated
         // velocity unchanged when wall resolution alters the position. Keeping
         // the attempted velocity is observable on the following tick (the
@@ -518,7 +526,7 @@ void MovementSystem::shoveLooseBodies(const Terrain& terrain, Transform& transfo
 void MovementSystem::collideLooseBodies(World& world, const Terrain& terrain) {
     collectLooseDiscs();
     if (looseDiscs_.empty()) return;
-    collectNpcDiscs();
+    collectNpcDiscs(world);
     const ContentRegistry& registry = content();
 
     // How far separation may have carried a mob from where it filed it in
@@ -599,10 +607,10 @@ void MovementSystem::collideLooseBodies(World& world, const Terrain& terrain) {
 }
 
 void MovementSystem::pushOutOfNpcs(const Terrain& terrain, Transform& transform,
-                                   double radius, bool phase) const {
+                                   double radius, bool passThroughMobs, bool phase) const {
     bool moved = false;
     for (const NpcDisc& npc : npcDiscs_) {
-        if (npc.realm != transform.realm) continue;
+        if (npc.realm != transform.realm || (passThroughMobs && npc.cutterPassable)) continue;
         const Vec2 offset = transform.position - npc.position;
         const double reach = npc.radius + radius;
         const double gapSq = offset.lengthSq();
@@ -731,7 +739,7 @@ void MovementSystem::moveMobs(World& world, const Terrain& terrain,
 
         const Vec2 attempted = velocity * envScale;
         const StepOutcome out = stepCollide(terrain, transform.realm, transform.position, attempted,
-                                            kMobWallRadius, dt);
+                                            kMobWallRadius, dt, true, true);
 
         // No friction is applied here: the AI phase owns a mob's velocity --
         // published raw, or carried under gardn's friction or the drift
@@ -1123,7 +1131,7 @@ void MovementSystem::separateMobs(World& world, const Terrain& terrain) {
         // point is allowed to plunge into a thin wall in one substep.
         Vec2 position = entry.position;
         stepCollide(terrain, entry.realm, position, entry.push.clampedLength(cap), kMobWallRadius,
-                    1.0);
+                    1.0, true, true);
         transform->position = position;
     }
 }

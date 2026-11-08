@@ -394,7 +394,7 @@ bool GuildPanel::render(MenuContext& ctx) {
 
     panelCard(canvas, panel, kGuildSkin);
 
-    text(canvas, "Guild", centreX, panel.y + kTitleBaseline,
+    text(canvas, menuTitle(MenuId::Guild), centreX, panel.y + kTitleBaseline,
          cardText(kGuildTitleSize, Align::Centre, Baseline::Alphabetic));
 
     const Rect closeRect = closeButtonRect(panel);
@@ -421,7 +421,7 @@ bool GuildPanel::render(MenuContext& ctx) {
         aboutLines = wrapAbout(guild.description, kAboutWidth - kAboutInset * 2,
                                kAboutTextSize, kAboutMaxLines);
     } else {
-        text(canvas, "No guild", centreX, panel.y + kNameBaseline,
+        text(canvas, tr(Msg::NoGuild), centreX, panel.y + kNameBaseline,
              cardText(kNameSize, Align::Centre, Baseline::Alphabetic));
         textAtAlpha(canvas, "Name a guild and pick a 5-letter tag to start one",
                     centreX, panel.y + kTagBaseline,

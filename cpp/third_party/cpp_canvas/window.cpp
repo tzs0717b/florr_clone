@@ -279,6 +279,8 @@ EM_JS(int, web_coarse_pointer, (), {
 // The value always starts with one space the player did not type. Deleting it
 // is how a Backspace past everything typed since the field was tapped shows
 // up at all: a keyboard with an empty box to work on reports nothing.
+// wanted: 0 = blur, 1 = raise+reset (new field tap), 2 = ensure focus without
+// resetting (chat / IME must keep composition and the OS language state).
 EM_JS(void, web_soft_keyboard, (int wanted), {
   let node = document.getElementById('__flix_soft_keyboard');
   if (!node) {
@@ -291,23 +293,26 @@ EM_JS(void, web_soft_keyboard, (int wanted), {
     node.setAttribute('autocorrect', 'off');
     node.setAttribute('spellcheck', 'false');
     node.setAttribute('enterkeyhint', 'go');
+    // Not 2px: some desktop IMEs refuse to attach to a near-zero box, which
+    // is exactly "切换输入法大部分时候失灵" with chat typed on the canvas.
     node.style.cssText =
-        'position:fixed;top:35%;left:50%;width:2px;height:2px;opacity:0;' +
+        'position:fixed;left:0;top:0;width:28px;height:28px;opacity:0.01;' +
         'font-size:16px;border:none;padding:0;background:transparent;' +
-        'pointer-events:none;z-index:-1;';
+        'caret-color:transparent;color:transparent;z-index:1;' +
+        'pointer-events:none;';
 
     Module.cppSoftErase = 0;
     Module.cppSoftText = '';
+    Module.cppSoftUp = false;
     node.__last = ' ';
     node.__composing = false;
-    // Back to the lone space, but never mid-word: resetting under a keyboard
-    // that is composing throws its word away. Only once the space is gone, or
-    // once the box has grown long enough to be worth trimming.
+    // This is an event buffer, not the canvas field's text. Keep no committed
+    // suffix: the DOM caret and the canvas caret may be in different places.
     const settle = () => {
       if (node.__composing) return;
-      if (node.value.startsWith(' ') && node.value.length <= 64) return;
       node.value = ' ';
       node.__last = ' ';
+      node.setSelectionRange(1, 1);
     };
     // iOS scrolls the document to bring a focused field into view, overflow:
     // hidden or not, and does not always scroll it back when the keyboard
@@ -319,7 +324,15 @@ EM_JS(void, web_soft_keyboard, (int wanted), {
       if (window.scrollX || window.scrollY) window.scrollTo(0, 0);
     });
     node.addEventListener('compositionstart', () => { node.__composing = true; });
-    node.addEventListener('compositionend', () => { node.__composing = false; settle(); });
+    node.addEventListener('compositionend', () => {
+      node.__composing = false;
+      // Some IMEs deliver their final input after compositionend.
+      setTimeout(settle, 0);
+    });
+    node.addEventListener('beforeinput', (event) => {
+      if (!node.__composing && !event.isComposing && node.value === ' ')
+        node.setSelectionRange(1, 1);
+    });
     node.addEventListener('input', (event) => {
       const before = Array.from(node.__last);
       const after = Array.from(node.value);
@@ -328,7 +341,8 @@ EM_JS(void, web_soft_keyboard, (int wanted), {
       // A paste is the page's own paste listener's to deliver; taking it here
       // too would put it in twice. So is a character a keydown already typed,
       // should a keyboard both name the key and insert it.
-      const keyed = kind === 'insertText' && event.data === Module.cppSoftKeyed &&
+      const keyed = kind === 'insertText' && typeof Module.cppSoftKeyed === 'string' &&
+                    event.data === Module.cppSoftKeyed &&
                     performance.now() - (Module.cppSoftKeyedAt || 0) < 100;
       Module.cppSoftKeyed = null;
       if (kind !== 'insertFromPaste' && kind !== 'insertFromDrop' && !keyed) {
@@ -347,15 +361,25 @@ EM_JS(void, web_soft_keyboard, (int wanted), {
     document.body.appendChild(node);
   }
   if (wanted) {
-    // Fresh for every tap: the tap may have put the caret somewhere else in
-    // the field, and the keyboard's idea of the text around it is now wrong.
-    node.value = ' ';
-    node.__last = ' ';
-    node.__composing = false;
-    node.focus({ preventScroll: true });
+    const fresh = wanted === 1 || !Module.cppSoftUp;
+    if (fresh) {
+      // Fresh for a new field tap only. Re-focusing chat every frame must NOT
+      // clear __composing or the buffer -- that is what kills IME mid-word.
+      node.value = ' ';
+      node.__last = ' ';
+      node.__composing = false;
+      node.setSelectionRange(1, 1);
+    }
+    if (document.activeElement !== node) node.focus({ preventScroll: true });
+    Module.cppSoftUp = true;
   } else {
     node.blur();
+    Module.cppSoftUp = false;
   }
+});
+EM_JS(int, web_ime_busy, (), {
+  const node = document.getElementById('__flix_soft_keyboard');
+  return (node && node.__composing) ? 1 : 0;
 });
 // What the keyboard did to the element since the last frame, taken once.
 EM_JS(int, web_soft_erase_take, (), {
@@ -854,10 +878,8 @@ struct Window::Impl {
     impl->mouseY = static_cast<float>(targetY) * toDesign + impl->lift();
   }
 
-  // The input guard's pointer rule (see input_guard.h): a mouse sample the
-  // pointer physics does not believe is moved to a random point on the
-  // canvas, in the same CSS pixels the event's own coordinates are in. That
-  // sample only; the next is judged on its own.
+  // Motion heuristics remain diagnostic. Trusted device events keep their
+  // coordinates, including fast/coalesced moves and their press/release.
   PointerPhysics pointerPhysics;
 
   void randomPoint(double& targetX, double& targetY) const {
@@ -876,13 +898,14 @@ struct Window::Impl {
     sample.sinceFrameMillis = emscripten_get_now() - lastFrameMillis;
     sample.scripted = !eventTrusted;
     pointerPhysics.setBounds(pointWidth, pointHeight);
-    if (!pointerPhysics.judge(sample)) randomPoint(targetX, targetY);
+    pointerPhysics.judge(sample);
+    if (shouldDisguisePointer(inputGuard, eventTrusted)) randomPoint(targetX, targetY);
   }
 
   // Touch has no physics to judge -- a finger lands wherever it lands -- so
   // only the browser's word is taken: a contact a script made is moved.
   void disguiseIfScripted(double& targetX, double& targetY) const {
-    if (!inputGuard || eventTrusted) return;
+    if (!shouldDisguisePointer(inputGuard, eventTrusted)) return;
     randomPoint(targetX, targetY);
   }
 
@@ -976,14 +999,14 @@ struct Window::Impl {
       const float x = static_cast<float>(targetX) * toDesign;
       const float y = static_cast<float>(targetY) * toDesign + impl->lift();
       if (phase == TouchPhase::Began) {
-        // A tap on a field is the one gesture this window does NOT consume.
-        // Every browser refuses to raise its keyboard for a focus() made
-        // during a touch it has been told to ignore, and a consumed touch
-        // produces no click either -- so consuming it would leave no moment
-        // at all where the keyboard could be asked for. See onClick.
+        // Let field gestures through so the browser can also deliver a click
+        // on devices that use it to activate their keyboard.
         if (impl->onKeyboardField(x, y)) {
           impl->passthrough = point.identifier;
           impl->passthroughLive = true;
+          impl->keyboardTapX = point.clientX;
+          impl->keyboardTapY = point.clientY;
+          impl->keyboardTapMoved = false;
         } else {
           // Anywhere else takes the keyboard away, and needs no gesture to
           // do it.
@@ -992,12 +1015,23 @@ struct Window::Impl {
       }
       if (impl->passthroughLive && point.identifier == impl->passthrough) {
         leaveToThePage = true;
+        if (std::abs(static_cast<double>(point.clientX) - impl->keyboardTapX) > 8 ||
+            std::abs(static_cast<double>(point.clientY) - impl->keyboardTapY) > 8) {
+          impl->keyboardTapMoved = true;
+        }
         if (phase == TouchPhase::Ended) {
           impl->passthroughLive = false;
+          if (type == EMSCRIPTEN_EVENT_TOUCHCANCEL) impl->keyboardTapMoved = true;
           // The page is about to replay this gesture as mousedown, mouseup
           // and click. The first two are already in this frame's stream from
           // the mirror, so they are dropped -- see onMouse.
           impl->ghostUntilMillis = emscripten_get_now() + kGhostWindowMillis;
+          // Focus synchronously on a trusted release. A synthetic click can
+          // be absent, and focus from the next animation frame cannot open
+          // the keyboard on mobile.
+          if (impl->eventTrusted && !impl->keyboardTapMoved) {
+            impl->raiseKeyboard(/*reset=*/false);
+          }
         }
       }
       impl->recordTouch(phase, point.identifier, x, y);
@@ -1009,32 +1043,29 @@ struct Window::Impl {
     return leaveToThePage ? EM_FALSE : EM_TRUE;
   }
 
-  /// The keyboard, raised from the one event every mobile browser honours.
-  ///
-  /// It has to be a real gesture -- a browser will not open its keyboard for a
-  /// focus() made from a timer or an animation frame -- and of the events a
-  /// gesture produces, `click` is the one that works everywhere. The browser
-  /// build focuses its own hidden input from exactly here, which is the
-  /// evidence this follows: raising it from `touchstart` instead looks right,
-  /// passes a desktop browser's touch emulation, and does nothing at all on a
-  /// phone.
+  /// Focus from desktop clicks and use the browser's click as a second
+  /// opportunity after a touch release, without resetting composition.
   static EM_BOOL onClick(int type, const EmscriptenMouseEvent* event, void* userData) {
     Impl* impl = implOf(userData);
+    const bool followsTouch = emscripten_get_now() < impl->ghostUntilMillis;
+    if (followsTouch && impl->keyboardTapMoved) return EM_TRUE;
     const float toDesign = impl->fit > 0 ? static_cast<float>(1.0 / impl->fit) : 1.0f;
-    // The click follows the mouseup it came from, which the pointer physics
-    // has already judged; it is not a sample of its own.
+    // Apply the same trust policy as movement, press, release and touch.
     double targetX = event->targetX, targetY = event->targetY;
-    if (impl->inputGuard &&
-        (!impl->eventTrusted || !impl->pointerPhysics.lastBelieved())) {
+    if (shouldDisguisePointer(impl->inputGuard, impl->eventTrusted)) {
       impl->randomPoint(targetX, targetY);
     }
     const float x = static_cast<float>(targetX) * toDesign;
     const float y = static_cast<float>(targetY) * toDesign + impl->lift();
     if (impl->onKeyboardField(x, y)) {
-      web_soft_keyboard(1);
-      impl->softKeyboardUp = true;
+      impl->raiseKeyboard(/*reset=*/!followsTouch);
     }
     return EM_TRUE;
+  }
+
+  void raiseKeyboard(bool reset) {
+    web_soft_keyboard(reset ? 1 : 2);
+    softKeyboardUp = true;
   }
 
   void lowerKeyboard() {
@@ -1048,6 +1079,8 @@ struct Window::Impl {
   /// comes out of it.
   std::int64_t passthrough = 0;
   bool passthroughLive = false;
+  double keyboardTapX = 0, keyboardTapY = 0;
+  bool keyboardTapMoved = false;
   /// Until when the page's own mouse events are its replay of a touch this
   /// window already mirrored, rather than a mouse. Long enough to cover the
   /// mousedown/mouseup pair a browser synthesises after a touchend, which is
@@ -1073,19 +1106,28 @@ struct Window::Impl {
     // It is not one: the text arrives on the on-screen keyboard's element, and
     // cancelling this event would only get in the way of it.
     const bool composing = event->keyCode == 229 || std::strcmp(event->key, "Unidentified") == 0 ||
-                           std::strcmp(event->key, "Process") == 0;
+                           std::strcmp(event->key, "Process") == 0 || web_ime_busy() != 0;
     if (composing) return EM_FALSE;
 
     Key key = fromDomCode(event->code);
     // A phone's keyboard may name the key and leave its physical code empty.
     if (key == Key::Unknown) key = fromDomKey(event->key);
     const std::size_t i = static_cast<std::size_t>(key);
+
+    // IME language switch (Shift, Alt+Shift, Ctrl+Space, …) must reach the OS.
+    // preventDefault on bare Shift/Alt is why chat "切换输入法大部分时候失灵".
+    const bool imeToggleKey = key == Key::LeftShift || key == Key::RightShift ||
+                              key == Key::LeftAlt || key == Key::RightAlt ||
+                              key == Key::LeftCtrl || key == Key::RightCtrl;
+
     if (type == EMSCRIPTEN_EVENT_KEYUP) {
       if (i < kKeyCount && impl->droppedKeys[i]) {
         impl->droppedKeys[i] = false;
-        return EM_TRUE;
+        return imeToggleKey ? EM_FALSE : EM_TRUE;
       }
       if (i < kKeyCount) { impl->down[i] = false; impl->pendingReleased[i] = true; }
+      // Soft-keyboard path: let the focused <input> see keyup too.
+      if (imeToggleKey || impl->softKeyboardUp) return EM_FALSE;
       return EM_TRUE;
     }
 
@@ -1112,10 +1154,17 @@ struct Window::Impl {
       impl->down[i] = true;
     }
 
+    // When the soft <input> holds focus, characters arrive through its `input`
+    // listener -- do not also mirror them from keydown (doubles + fights IME).
+    // Enter/Escape still mark as pressed above so chat can send / close.
+    const bool softText =
+        impl->softKeyboardUp && key != Key::Enter && key != Key::Escape &&
+        key != Key::Backspace && key != Key::Delete && !imeToggleKey;
+
     // KeyboardEvent.key is the character the layout produced when it is one, and
     // a name like "ArrowLeft" when it is not. One code point -- however many
     // UTF-8 bytes that is -- is the test for the difference.
-    if (!dropped && !event->ctrlKey && !event->metaKey) {
+    if (!dropped && !softText && !event->ctrlKey && !event->metaKey) {
       const char* text = event->key;
       const std::size_t bytes = std::strlen(text);
       const bool oneCodePoint =
@@ -1136,6 +1185,16 @@ struct Window::Impl {
     if (event->ctrlKey || event->metaKey) {
       const auto& claimed = impl->claimedShortcuts;
       return std::find(claimed.begin(), claimed.end(), key) != claimed.end() ? EM_TRUE : EM_FALSE;
+    }
+    if (imeToggleKey) return EM_FALSE;
+    // Erase keys were already queued above. Letting the hidden input delete
+    // too would queue a second erase from its input listener.
+    if (impl->softKeyboardUp && (key == Key::Backspace || key == Key::Delete)) return EM_TRUE;
+    // Soft keyboard up: leave letters/Space to the <input> + IME. Keep eating
+    // Enter/Escape/F-keys policy below only when we need the game to own them.
+    if (impl->softKeyboardUp && key != Key::Enter && key != Key::Escape && key != Key::Tab &&
+        key != Key::F5 && key != Key::F12) {
+      return EM_FALSE;
     }
     return (key == Key::F5 || key == Key::F12) ? EM_FALSE : EM_TRUE;
   }
@@ -1182,6 +1241,7 @@ struct Window::Impl {
     impl->claimed.clear();
     impl->mirroring = false;
     impl->touchInside = false;
+    impl->passthroughLive = false;
     impl->gesture.cancel();
     return EM_TRUE;
   }
@@ -1737,6 +1797,18 @@ void Window::dismissSoftKeyboard() {
   if (!impl_->touches.empty()) return;
   if (emscripten_get_now() < impl_->ghostUntilMillis) return;
   impl_->lowerKeyboard();
+#endif
+}
+
+void Window::ensureSoftKeyboard() {
+#ifdef __EMSCRIPTEN__
+  // On touch, a frame can run before the browser dispatches the tap's click.
+  // Focusing here can leave an input focused without ever opening the OS
+  // keyboard, so leave touch focus to onTouch/onClick.
+  if (impl_->passthroughLive || impl_->pointerIsTouch || web_coarse_pointer()) return;
+  // Chat opened with Enter never hits onKeyboardField; without this the
+  // canvas keeps document focus and OS IME toggles (Shift / Alt+Shift) miss.
+  impl_->raiseKeyboard(/*reset=*/false);
 #endif
 }
 const std::string& Window::typedText() const { return impl_->typed; }

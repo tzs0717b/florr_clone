@@ -274,10 +274,11 @@ for (let by = 0; by < GRID_SIZE / BLOCK; ++by) {
             }
         }
         if (count === 0) continue;
-        // Up to 90 at nine tenths of the deepest walk; the pharaoh's band is
-        // the only ground at 100.
+        // Preserve the entrance and middle. Only the deepest former 85/90
+        // bands rise to 145/160: 46.1%/60.8% super at neutral luck.
         const reach = Math.min(1, sum / count / (0.9 * deepestDistance));
-        const difficulty = 5 * Math.round(18 * reach);
+        const baseDifficulty = 5 * Math.round(18 * reach);
+        const difficulty = baseDifficulty >= 90 ? 160 : baseDifficulty >= 85 ? 145 : baseDifficulty;
         const r = cellRect(bx * BLOCK, by * BLOCK, BLOCK, BLOCK);
         bands.push(object({
             name: `block ${bx},${by}`, polygon: rectPolygon(r.w, r.h), x: r.x, y: r.y,
@@ -292,7 +293,7 @@ for (let by = 0; by < GRID_SIZE / BLOCK; ++by) {
     bands.push(object({
         name: 'pharaoh', polygon: rectPolygon(r.w, r.h), x: r.x, y: r.y,
         properties: [
-            prop('difficulty', 'float', 100),
+            prop('difficulty', 'float', 175),
             prop('mobs', 'string', 'pharaoh_beetle'),
             prop('singular', 'bool', true),
         ],

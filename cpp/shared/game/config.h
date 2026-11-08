@@ -897,6 +897,8 @@ struct PetalConfig {
     /// to its flower as health. Fang's. Flat across the ladder: the damage it
     /// is a fraction OF already climbs it.
     double lifesteal = 0;
+    /// Ruby's common-tier chance of another hit in the same lightning strike.
+    double lightningRepeatChance = 0;
     /// What a worn cutter adds to the flower's BODY damage, before rarity.
     /// Scaled on the damage ladder, so it is stated at the common tier like
     /// every other damage figure. Not `damage` itself: nothing about this
@@ -1133,6 +1135,23 @@ struct MobStats {
     bool spawnable() const { return ambient; }
 };
 
+inline constexpr int kBatteryCharges = 3;
+inline constexpr double kBatteryStrikeIntervalMillis = 500.0;
+inline constexpr double kLightningFallbackDamage = 25.0;
+inline constexpr double kLightningRadius = 1000.0;
+inline constexpr double kCapacitorChargePerMillis = 1.5;
+inline constexpr double kCapacitorMaxCharge = 75.0;
+inline constexpr double kCapacitorWindowMillis = 900.0;
+inline constexpr double kCapacitorSynergyDamage = 55.0;
+inline constexpr double kCapacitorSynergyCooldownMillis = 900.0;
+inline constexpr double kFlowerCorruptChance = 0.05;
+inline constexpr int kFlowerPetCount = 3;
+
+/// Capacitor gains half of the Reload talent's cooldown reduction.
+inline constexpr double capacitorCooldownMillis(double baseMillis, double reloadScale) {
+    return baseMillis * (0.5 + 0.5 * reloadScale);
+}
+
 /// A petal at one tier.
 struct PetalStats {
     double damage = 0;
@@ -1189,6 +1208,8 @@ struct PetalStats {
     /// bar, itself included: 2.5% a tier. Zero for every other petal. See
     /// barReloadCut.
     double reloadCut = 0;
+    double lightningRepeatChance = 0;
+    int maxLightningRepeats = 0;
     /// The share a disc takes off every body collision its flower suffers:
     /// florr's 1 - 0.91^(tier+1), 9% at common. Zero for every other petal.
     double collisionResist = 0;
@@ -1459,7 +1480,7 @@ inline constexpr int kCrownMaxLoans = 25;
 /// player could otherwise reach it through has to leave out: the shop, the
 /// `random` drop rows, and the gallery's mirror of them.
 inline bool petalHasOwnSource(const PetalConfig& config) {
-    return petalIsSacrifice(config) || petalLendsBasic(config);
+    return petalIsSacrifice(config) || petalLendsBasic(config) || config.id == "pyramid_map";
 }
 
 /// Whether the world hands this petal out at this tier: at or above its

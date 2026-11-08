@@ -1,5 +1,6 @@
 #include "server/systems/spawning.h"
 
+#include "server/loot_eligibility.h"
 #include "server/systems/movement.h"
 
 #include <algorithm>
@@ -152,15 +153,19 @@ Entity freshestAttacker(World& world, const Bounty* bounty, Realm realm,
     for (const Bounty::Share& share : bounty->contributors) {
         double before = 0.0;
         for (const Bounty::Share& old : seen) {
-            if (old.player == share.player) {
+            // Match by connection when known -- body changes on respawn.
+            const bool same = share.owner != 0 ? old.owner == share.owner
+                                               : old.player == share.player;
+            if (same) {
                 before = old.damage;
                 break;
             }
         }
         const double growth = share.damage - before;
         if (!(growth > bestGrowth)) continue;
-        if (!attackerUsable(world, share.player, realm)) continue;
-        best = share.player;
+        const Entity body = liveContributorBody(world, share);
+        if (body == NULL_ENTITY || !attackerUsable(world, body, realm)) continue;
+        best = body;
         bestGrowth = growth;
     }
     seen.assign(bounty->contributors.begin(), bounty->contributors.end());
@@ -791,6 +796,7 @@ SpawnSystem::Sacrifice SpawnSystem::planSacrifice(World& world, const ContentReg
     const SpawnZone* zone = nullptr;
     for (const SpawnZone& candidate : zones_) {
         if (candidate.realm != realm) continue;
+        if (candidate.worldUnique) continue;
         if (!zoneContains(candidate.bounds, candidate.polygon, at)) continue;
         zone = &candidate;
         break;
@@ -1862,14 +1868,17 @@ void SpawnSystem::rebuildZones(const ContentRegistry& content) {
         realmBiome_[realmIndex(map.realm())] = biome;
         for (const MapElement& element : map.elements()) {
             if (!element.isSpawnBand() && !element.isMobRegion()) continue;
+            if (map.prestige() && element.worldUnique) continue;
             SpawnZone zone;
             zone.bounds = element.bounds;
             zone.polygon = element.polygon;
             zone.difficulty = element.difficulty;
             zone.realm = map.realm();
             zone.singular = element.singular;
+            zone.worldUnique = element.worldUnique;
             zone.prestige = map.prestige();
             zone.biomeName = map.biome();
+            zone.sewerGarbageBoost = map.id() == "sewers";
 
             // The rows are resolved to indices ONCE, here, rather than on every
             // spawn: a group name is a hash probe and a busy band rolls several
@@ -1891,6 +1900,8 @@ void SpawnSystem::rebuildZones(const ContentRegistry& content) {
                                    map.id().c_str(), row.name.c_str());
                 }
                 zone.resolved.push_back(resolved);
+                if (map.id() == "ocean" && row.name == "jellyfish" && row.weight > 0)
+                    zone.extraApex = true;
             }
             if (element.isMobRegion()) {
                 // A region owns no population, so none of the bookkeeping
@@ -2037,7 +2048,8 @@ void SpawnSystem::scatterBossClocks(double nowMillis) {
     for (const std::size_t i : fresh) bossClocks_[i].scattered = true;
 }
 
-Rarity SpawnSystem::rollBossUpgrade(World& world, const SpawnZone& zone, double nowMillis) {
+Rarity SpawnSystem::rollBossUpgrade(World& world, const SpawnZone& zone, double nowMillis,
+                                    double apexChance) {
     if (zone.biome >= bossClocks_.size()) return Rarity::Super;
     const BiomeBossClock& clock = bossClocks_[zone.biome];
     // Only a READY clock draws at all, so the stream is untouched for every
@@ -2045,8 +2057,10 @@ Rarity SpawnSystem::rollBossUpgrade(World& world, const SpawnZone& zone, double 
     // already standing in the biome does not draw either: it stays ready, and
     // the first super after that one dies gets the roll.
     const auto rolls = [&](double readyMillis, Rarity tier) {
-        return nowMillis >= readyMillis && !topBossTaken(world, tier, zone.realm) &&
-               bossRng_.chance(kBossUpgradeChance);
+        const int limit = tier != Rarity::Apex ? 1
+            : zone.extraApex ? kJellyfishZoneApexLimit : kApexBiomeLimit;
+        return nowMillis >= readyMillis && !topBossTaken(world, tier, zone.realm, limit) &&
+               bossRng_.chance(tier == Rarity::Apex ? apexChance : kBossUpgradeChance);
     };
     if (rolls(clock.apexReadyMillis, Rarity::Apex)) return Rarity::Apex;
     if (rolls(clock.uniqueReadyMillis, Rarity::Unique)) return Rarity::Unique;
@@ -2086,15 +2100,15 @@ std::uint32_t SpawnSystem::biomeKey(Realm realm) const {
     return slot != kInvalidIndex ? slot : 0x10000u + static_cast<std::uint32_t>(realmIndex(realm));
 }
 
-bool SpawnSystem::topBossTaken(World& world, Rarity rarity, Realm realm) {
+bool SpawnSystem::topBossTaken(World& world, Rarity rarity, Realm realm, int limit) {
     const std::uint32_t key = biomeKey(realm);
-    bool taken = false;
+    int count = 0;
     ambient_->each([&](Entity e, MobTag&, Transform& transform, Body&, MobType& type,
                        AmbientMob&) {
-        if (taken || type.rarity != rarity || !isWholeAnimal(world, e)) return;
-        taken = isWorldRealm(transform.realm) && biomeKey(transform.realm) == key;
+        if (type.rarity != rarity || !isWholeAnimal(world, e)) return;
+        if (isWorldRealm(transform.realm) && biomeKey(transform.realm) == key) ++count;
     });
-    return taken;
+    return count >= limit;
 }
 
 void SpawnSystem::noteStandingBosses(World& world, const CommandBuffer& commands) {
@@ -2144,11 +2158,21 @@ void SpawnSystem::cullExtraTopBosses(World& world, CommandBuffer& commands) {
         return a.order < b.order;
     });
     culled_.clear();
+    int count = 1;
     for (std::size_t i = 1; i < topBosses_.size(); ++i) {
         const TopBoss& first = topBosses_[i - 1];
         const TopBoss& extra = topBosses_[i];
         if (extra.biome == first.biome && extra.rarity == first.rarity) {
-            culled_.push_back(extra.entity);
+            ++count;
+            const bool extraSlot = extra.rarity == Rarity::Apex &&
+                std::any_of(zones_.begin(), zones_.end(), [&](const SpawnZone& z) {
+                    return z.extraApex && !z.prestige && z.biome == extra.biome;
+                });
+            const int limit = extra.rarity != Rarity::Apex ? 1
+                : extraSlot ? kJellyfishZoneApexLimit : kApexBiomeLimit;
+            if (count > limit) culled_.push_back(extra.entity);
+        } else {
+            count = 1;
         }
     }
     if (culled_.empty()) return;
@@ -2338,8 +2362,9 @@ bool SpawnSystem::stockZone(World& world, const Terrain& terrain, const ContentR
     // there instead, one spawn in 100,000 and one super in 10,000, or in its
     // own biomes a magician, one super in twenty. At the tier the band rolled,
     // and before the boss upgrade below, so a super square can come out the
-    // biome's unique like any other super.
-    type = rollStandIn(content, type, rarity, zone.biomeName, rng);
+    // biome's unique like any other super. Never in a world-unique zone, whose
+    // one guardian is the point of it.
+    if (!zone.worldUnique) type = rollStandIn(content, type, rarity, zone.biomeName, rng);
 
     // A super may come out a unique or an apex instead, if its biome's clock
     // for that tier has run down. After the type roll, which is safe because a
@@ -2347,8 +2372,11 @@ bool SpawnSystem::stockZone(World& world, const Terrain& terrain, const ContentR
     // for a permanent fixture, which is a DPS post rather than an event. Never
     // in a prestige twin, which has no clocks.
     bool upgraded = false;
-    if (rarity == Rarity::Super && !zone.prestige && !content.mob(type).neverAmbient) {
-        rarity = rollBossUpgrade(world, zone, nowMillis);
+    if (rarity == Rarity::Super && !zone.prestige && !zone.worldUnique &&
+        !content.mob(type).neverAmbient) {
+        const double apexChance = zone.sewerGarbageBoost && content.mob(type).id == "garbage"
+                                      ? kSewerGarbageApexUpgradeChance : kApexUpgradeChance;
+        rarity = rollBossUpgrade(world, zone, nowMillis, apexChance);
         upgraded = rarity != Rarity::Super;
     }
 

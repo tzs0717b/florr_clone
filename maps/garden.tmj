@@ -2670,7 +2670,7 @@
                         {
                          "name":"difficulty",
                          "type":"float",
-                         "value":98
+                         "value":150
                         }, 
                         {
                          "name":"mobs",
@@ -2869,7 +2869,7 @@
                         {
                          "name":"difficulty",
                          "type":"float",
-                         "value":100
+                         "value":160
                         }, 
                         {
                          "name":"mobs",
@@ -5087,7 +5087,7 @@
                         {
                          "name":"difficulty",
                          "type":"float",
-                         "value":92
+                         "value":140
                         }, 
                         {
                          "name":"mobs",

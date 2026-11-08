@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <string>
 
+#include "client/ui/content_i18n.h"
 #include "client/ui/menu_theme.h"
 #include "client/ui/menus.h"
 #include "client/ui/text.h"
@@ -160,7 +161,7 @@ bool LeaderboardPanel::render(MenuContext& ctx) {
 
     panelCard(canvas, panel, kLeaderboardSkin);
 
-    panelHeading(canvas, panel, "Leaderboard");
+    panelHeading(canvas, panel, menuTitle(MenuId::Leaderboard));
 
     // The count of every account the server holds, beside the title. It comes
     // with the board rather than being derived from it: the board is the top
@@ -179,7 +180,7 @@ bool LeaderboardPanel::render(MenuContext& ctx) {
         textAtAlpha(canvas, line, panel.x + 160.0, panel.y + 25.0, stats, 0.7);
     }
 
-    pillButton(canvas, refreshRect, "Refresh", kLeaderboardSkin.border);
+    pillButton(canvas, refreshRect, tipRefresh(), kLeaderboardSkin.border);
     panelClose(canvas, closeRect, closeRect.contains(mouse));
 
     canvas.save();

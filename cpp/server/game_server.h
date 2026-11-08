@@ -25,6 +25,7 @@
 #include "server/replication.h"
 #include "server/session.h"
 #include "server/squads.h"
+#include "server/systems/map_pickups.h"
 #include "shared/core/world.h"
 #include "shared/game/components.h"
 #include "shared/game/map_elements.h"
@@ -115,15 +116,14 @@ struct ServerConfig {
     /// (kBotTargetTotalPlayers minus the humans online). Zero is a world with
     /// no bots in it at all.
     ///
-    /// Here for the tests. Bots are spread over every biome a player can join
-    /// (botBiomes()), the overworld a test joins into among them, and each is
-    /// born in the doors and beginner bands a joining player is put down in
-    /// (pickBotSpawn) -- which is what a live server WANTS and what makes
-    /// "these two flowers are the only ones in sight" or "this mob lived long
-    /// enough to fire" impossible to state. `/admin set_bot_count` is the same
-    /// knob at run time; this is the one a harness can set before the first
-    /// tick.
-    int botCount = -1;
+    /// Default 0 (AshFlor / .161): stock servers ship without filler bots;
+    /// pass `--bots -1` or `/admin set_bot_count default` to restore auto fill.
+    /// Here for the tests too. Bots are spread over every biome a player can
+    /// join (botBiomes()), the overworld a test joins into among them, and each
+    /// is born in the doors and beginner bands a joining player is put down in
+    /// (pickBotSpawn). `/admin set_bot_count` is the same knob at run time;
+    /// this is the one a harness can set before the first tick.
+    int botCount = 0;
     /// The `/admin db` key to use as is, instead of the one in the key file
     /// beside the database. Empty means the file. Only the offline page sets
     /// it: its server is a browser tab with no file anybody can open, and a
@@ -404,6 +404,7 @@ private:
     void handleRespawn(Session&);
     void handlePing(net::Connection&, ByteReader&);
     void handleUpgradeSkill(Session&, net::Connection&, ByteReader&);
+    void handleDowngradeSkill(Session&, net::Connection&, ByteReader&);
     void handleResetSkills(Session&, net::Connection&);
     void handleBuyPetal(Session&, net::Connection&, ByteReader&);
     void handleRedeemCode(Session&, net::Connection&, ByteReader&);
@@ -778,6 +779,9 @@ private:
     /// markup as well (shared/game/markup.cpp), so a reply may be either, and
     /// /help and /guild-info are one message joined with `<br/>`.
     void sendSystem(net::Connection&, const std::string& text);
+    /// Squad invite toast + the same system chat line players already see.
+    void sendSquadInvite(net::Connection&, const std::string& fromUsername,
+                         bool fromGuild);
 
     // -- scheduled restart -------------------------------------------------
     //
@@ -1098,9 +1102,20 @@ private:
     /// Skipped entirely while nobody is logged in, exactly as the browser
     /// server's own interval is: an idle server should send nothing.
     void broadcastDebugStats();
+    /// Top-right online roster under the minimap: name / level / guild / map.
+    /// At most once every two seconds, and only when the fingerprint changes,
+    /// so an idle lobby is not a steady unicast tax.
+    void serviceOnlineRoster(double nowMillis);
 
     // -- lifecycle ---------------------------------------------------------
     Entity spawnPlayer(Session&);
+    /// Continue after death: stand near `around` in `realm` (open floor via
+    /// Terrain::findOpenSpawn) instead of the title-screen door. Same body
+    /// setup as spawnPlayer once the point is chosen.
+    Entity spawnPlayerNear(Session&, Realm realm, Vec2 around);
+    /// Shared tail of spawnPlayer / spawnPlayerNear: settle realm, build body,
+    /// arm respawn protection, publish session + squad.
+    Entity finishPlayerSpawn(Session&, Realm realm, Vec2 spawn);
     /// Assembles one player body in `realm` at `position` and writes the
     /// account onto it. Everything spawnPlayer does EXCEPT choosing where to
     /// stand, settling the session's realm and starting an arena run -- which
@@ -1563,6 +1578,11 @@ private:
     /// by lower-cased username, mapped to its guildLocation().
     std::unordered_map<std::string, std::string> guildPresence_;
     double nextGuildPresenceMillis_ = 0;
+    /// Last OnlineRoster payload fingerprint (concatenated rows); empty until
+    /// the first send. Compared before any unicast so unchanged rosters cost
+    /// only the cheap string build once per interval.
+    std::string onlineRosterFingerprint_;
+    double nextOnlineRosterMillis_ = 0;
 
     SquadRoster squads_;
     /// The flattened form the loot and XP rules read, rebuilt each tick.
@@ -1829,6 +1849,7 @@ private:
     double savedSacrificeReadyMillis_ = -1.0;
     /// The sacrifice lying on the ground, if one is.
     Entity sacrificeDrop_ = NULL_ENTITY;
+    PyramidMapPickups pyramidMapPickups_;
     /// The sacrifice clock's and placement's own stream, so dealing a wait
     /// never moves what rng_ hands every other spawn.
     Rng sacrificeRng_;

@@ -21,8 +21,9 @@ TEST(usernames_accept_reasonable_names_and_reject_the_rest) {
     CHECK(!Database::validUsername("abcdefghijklmnopq", reason));
     CHECK(!Database::validUsername("", reason));
 
-    // Must start with a letter, so a name cannot mimic a system line.
-    CHECK(!Database::validUsername("1bob", reason));
+    // Digit-leading is allowed; underscore / symbol leading is not.
+    CHECK(Database::validUsername("1bob", reason));
+    CHECK(Database::validUsername("007", reason));
     CHECK(!Database::validUsername("_bob", reason));
     CHECK(!Database::validUsername("-bob", reason));
 

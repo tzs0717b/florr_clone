@@ -22,7 +22,7 @@ namespace flix::net {
 using ConnectionId = std::uint32_t;
 
 /// Bumped whenever any message layout in this file changes.
-inline constexpr std::uint16_t kProtocolVersion = 80;
+inline constexpr std::uint16_t kProtocolVersion = 81;
 
 /// "Not one of the rotating store's cards": a purchase at the full ladder
 /// price. Any other value is a slot index the server checks against the offers
@@ -242,6 +242,11 @@ enum class ClientMessage : std::uint8_t {
                         ///< Checked as PublishSkin is; answered with a
                         ///< SkinPublished broadcast of the same id. (Version 73.)
     AdminTools, ///< str JSON: permission-checked arena/events/codes requests.
+    DowngradeSkill,     ///< u8 skillId, u8 tier -- refunds this owned node and
+                        ///< every higher tier on the same branch (level becomes
+                        ///< tier - 1), plus any fork children whose prerequisite
+                        ///< is then unmet. Hold-to-refund on the talent tree;
+                        ///< points come back because spent() drops. (Version 81, from aqiangei v69.)
 };
 
 enum class ServerMessage : std::uint8_t {
@@ -465,6 +470,15 @@ enum class ServerMessage : std::uint8_t {
                         ///< account's standing on one skin, after a VoteSkin
                         ///< or FavoriteSkin, refused or not. (Version 70.)
     AdminTools, ///< str JSON: bounded admin tools reply.
+    OnlineRoster,       ///< u8 count (max 64), { str name, u16 level, str guild,
+                        ///< str location, u8 placed, [u8 realm, f32 x, f32 y if
+                        ///< placed != 0] }*. Live signed-in players for the
+                        ///< top-right roster and whole-map dots. `location` is
+                        ///< the biome label (empty on title / death). Readers
+                        ///< must consume `placed` and optional coords.
+    SquadInviteReceived, ///< str fromUsername, u8 fromGuild (0/1). Pending
+                        ///< squad invite for the top-left Accept/Decline toast.
+                        ///< Additive; older clients skip an unknown id.
 };
 
 // ---------------------------------------------------------------------------

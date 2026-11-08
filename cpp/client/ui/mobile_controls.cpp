@@ -72,10 +72,9 @@ constexpr std::uint32_t kAttackFill = 0xDC3C3Cu;
 constexpr std::uint32_t kAttackRing = 0xFF7878u;
 constexpr std::uint32_t kRetractFill = 0x3C6EDCu;
 constexpr std::uint32_t kRetractRing = 0x78AAFFu;
-// Ours. A purer yellow than the pattern above gives: the fill is laid over the
-// grass at the same alpha as the others, which pulls it towards olive.
-constexpr std::uint32_t kRowSwapFill = 0xFFD21Eu;
-constexpr std::uint32_t kRowSwapRing = 0xFFE678u;
+/// Swap / presets: warm amber so it reads apart from Attack and Retract.
+constexpr std::uint32_t kRowSwapFill = 0xC48A2Au;
+constexpr std::uint32_t kRowSwapRing = 0xE8C06Au;
 
 bool within(Vec2 centre, double x, double y, double radius) {
     const double dx = x - centre.x;
@@ -131,6 +130,7 @@ void MobileControls::layout(int viewWidth, int viewHeight, double loadoutBarHeig
     // `touch` as well, a tablet's smaller stick would have dropped its
     // answering ring onto the transcript.
     const double bottom = viewHeight - loadoutBarHeight - kBottomGap * scale_;
+    barTop_ = viewHeight - loadoutBarHeight;
     stickCentre_ = {kStickCentreX * scale_,
                     bottom - kStickRadius * scale_ - kStickLift * narrow};
     attackCentre_ = {viewWidth - (kAttackMargin + kAttackRadius) * scale_,
@@ -150,16 +150,42 @@ void MobileControls::layout(int viewWidth, int viewHeight, double loadoutBarHeig
     stickCentre_.x = std::min(stickCentre_.x, std::max(floorX, roomFor));
 }
 
-bool MobileControls::hits(double x, double y) const {
-    if (!placed_) return false;
-    return within(stickCentre_, x, y, kStickHitRadius * scale_) ||
-           within(attackCentre_, x, y, kAttackRadius * kButtonHitSlack * scale_) ||
+double MobileControls::stickHitRadius() const {
+    return placed_ ? kStickHitRadius * scale_ : 0.0;
+}
+
+bool MobileControls::onButton(double x, double y) const {
+    return within(attackCentre_, x, y, kAttackRadius * kButtonHitSlack * scale_) ||
            within(retractCentre_, x, y, kRetractRadius * kButtonHitSlack * scale_) ||
            within(rowSwapCentre_, x, y, kRowSwapRadius * kButtonHitSlack * scale_);
 }
 
-void MobileControls::update(const std::vector<TouchEvent>& events) {
+bool MobileControls::onStick(double x, double y) const {
+    const double stickR = kStickHitRadius * scale_;
+    if (within(stickCentre_, x, y, stickR)) return true;
+    // Approach pad under the stick (aqiangei): thumbs often start below the
+    // knob and slide up. Without it that first contact lands on the closed
+    // chat slot (or its old footprint) and opens the keyboard instead of
+    // steering. It stops at the loadout bar's top edge.
+    const double padBottom = std::min(stickCentre_.y + stickR + 96.0 * scale_, barTop_);
+    return x >= stickCentre_.x - stickR && x <= stickCentre_.x + stickR &&
+           y >= stickCentre_.y && y <= padBottom;
+}
+
+bool MobileControls::hits(double x, double y) const {
+    if (!placed_) return false;
+    return onStick(x, y) || onButton(x, y);
+}
+
+void MobileControls::update(const std::vector<TouchEvent>& events, double timeSeconds) {
     if (!placed_) return;
+
+    // Long-press fires even when the finger is still -- no Moved event arrives
+    // while a thumb rests on R, so the threshold is checked every frame.
+    if (rowSwap_.held && !swapLong_ && swapDownAt_ >= 0.0 &&
+        timeSeconds - swapDownAt_ >= kSwapLongPressSeconds) {
+        swapLong_ = true;
+    }
     for (const TouchEvent& event : events) {
         const TouchPoint& point = event.point;
         switch (event.phase) {
@@ -168,8 +194,8 @@ void MobileControls::update(const std::vector<TouchEvent>& events) {
                 // own order. A finger that lands on a control already held
                 // belongs to nothing: the second thumb on one button is not a
                 // second press of it.
-                if (!stick_.held &&
-                    within(stickCentre_, point.x, point.y, kStickHitRadius * scale_)) {
+                if (!stick_.held && onStick(point.x, point.y) &&
+                    !onButton(point.x, point.y)) {
                     stick_ = {point.id, true};
                     moveKnob(point.x, point.y);
                 } else if (!attack_.held && within(attackCentre_, point.x, point.y,
@@ -181,7 +207,8 @@ void MobileControls::update(const std::vector<TouchEvent>& events) {
                 } else if (!rowSwap_.held && within(rowSwapCentre_, point.x, point.y,
                                                     kRowSwapRadius * kButtonHitSlack * scale_)) {
                     rowSwap_ = {point.id, true};
-                    rowSwapQueued_ = true;
+                    swapDownAt_ = timeSeconds;
+                    swapLong_ = false;
                 }
                 break;
 
@@ -199,7 +226,16 @@ void MobileControls::update(const std::vector<TouchEvent>& events) {
                 }
                 if (attack_.is(point.id)) attack_.held = false;
                 if (retract_.is(point.id)) retract_.held = false;
-                if (rowSwap_.is(point.id)) rowSwap_.held = false;
+                if (rowSwap_.is(point.id)) {
+                    // A short release is the row swap (or cancels a sticky
+                    // preset bank MenuSystem already armed). A long one only
+                    // ends the hold -- the bank stays until a tile is picked
+                    // or R is tapped again.
+                    if (!swapLong_) rowSwapQueued_ = true;
+                    rowSwap_.held = false;
+                    swapDownAt_ = -1.0;
+                    swapLong_ = false;
+                }
                 break;
         }
     }
@@ -219,7 +255,12 @@ void MobileControls::releaseLost(const std::vector<TouchPoint>& live) {
     }
     if (!down(attack_)) attack_.held = false;
     if (!down(retract_)) retract_.held = false;
-    if (!down(rowSwap_)) rowSwap_.held = false;
+    if (!down(rowSwap_)) {
+        // Lost, not lifted: neither a tap nor the end of a long press.
+        rowSwap_.held = false;
+        swapDownAt_ = -1.0;
+        swapLong_ = false;
+    }
 }
 
 void MobileControls::reset() {
@@ -228,10 +269,12 @@ void MobileControls::reset() {
     retract_.held = false;
     rowSwap_.held = false;
     rowSwapQueued_ = false;
+    swapDownAt_ = -1.0;
+    swapLong_ = false;
     knob_ = {0, 0};
 }
 
-bool MobileControls::takeRowSwap() {
+bool MobileControls::consumeSwapRowsTap() {
     const bool queued = rowSwapQueued_;
     rowSwapQueued_ = false;
     return queued;
@@ -333,20 +376,15 @@ void MobileControls::draw(Canvas& canvas) const {
 
     }
 
-    // Row swap: an arrow up beside an arrow down, the two rows trading places.
-    const double arrow = kRowSwapRadius * scale_ * 0.5;
-    const double head = arrow * 0.45;
-    canvas.beginPath();
-    for (const double side : {-1.0, 1.0}) {
-        const double x = rowSwapCentre_.x + side * arrow * 0.5;
-        const double tip = rowSwapCentre_.y + side * arrow;
-        canvas.moveTo(static_cast<float>(x), static_cast<float>(rowSwapCentre_.y - side * arrow));
-        canvas.lineTo(static_cast<float>(x), static_cast<float>(tip));
-        canvas.moveTo(static_cast<float>(x - head), static_cast<float>(tip - side * head));
-        canvas.lineTo(static_cast<float>(x), static_cast<float>(tip));
-        canvas.lineTo(static_cast<float>(x + head), static_cast<float>(tip - side * head));
-    }
-    canvas.stroke();
+    // R: the bound Swap loadout rows key (tap) and the preset bank (hold). A
+    // letter rather than a glyph so it matches the caption under the bar.
+    TextStyle letter;
+    letter.size = std::round(kRowSwapRadius * scale_ * 0.85);
+    letter.fill = kPaper;
+    letter.stroke = kInk;
+    letter.align = Align::Centre;
+    letter.baseline = Baseline::Middle;
+    text(canvas, "R", rowSwapCentre_.x, rowSwapCentre_.y, letter);
 
     canvas.restore();
 }

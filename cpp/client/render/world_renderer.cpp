@@ -14,6 +14,7 @@
 #include "client/render/art_cache.h"
 #include "client/render/skin_render.h"
 #include "shared/game/signature_skin.h"
+#include "client/ui/content_i18n.h"
 #include "client/ui/draw.h"
 #include "client/ui/item_tile.h"
 #include "client/ui/menu_widgets.h"
@@ -174,6 +175,10 @@ constexpr std::uint32_t kWornDiscOutline = 0x111111u;
 /// An Undead flower's body: florr's `Colors/undead`, the green its mummy
 /// beetle wears.
 constexpr std::uint32_t kUndeadBody = 0x83B05Du;
+
+/// Downed-player name tag (ashflor RenderName amber), so a corpse reads as a
+/// revive target rather than another living white plate.
+constexpr std::uint32_t kCorpseName = 0xFFB060u;
 
 /// Whether a flower is drawn wrapped in the bandage: for as long as it wears
 /// one (user, 2026-10-22: "always show the bandage drawing when it is
@@ -477,7 +482,7 @@ constexpr double kMobTierDrop = 0.7 * kMobNameSize;
 constexpr double kMobDpsDrop = kMobTierDrop + 1.4 * kMobTierSize;
 
 /// What a summon's plate says it is, at the left of the tier row.
-constexpr const char* kPetLabel = "Summon";
+// Summon caption uses tipSummon() so it follows the UI language.
 
 
 /// A flower-shaped mob. Not read off mob stats: the loader overwrites every
@@ -2605,8 +2610,9 @@ void WorldRenderer::drawPlayerPlate(Canvas& canvas, const RemoteEntity& entity,
         // The browser build never sets a baseline in the world pass, so the
         // pen sits on the alphabetic baseline.
         style.baseline = ui::Baseline::Alphabetic;
-        ui::text(canvas, entity.name.empty() ? "Unnamed" : entity.name, left,
-                 barY - 4.0 * zoom, style);
+        if (!entity.name.empty()) {
+            ui::text(canvas, entity.name, left, barY - 4.0 * zoom, style);
+        }
     }
 
     if (options.healthBars) {
@@ -2744,6 +2750,25 @@ void WorldRenderer::drawCorpse(Canvas& canvas, const RemoteEntity& entity, const
     canvas.rotate(static_cast<float>(entity.angle));
     canvas.scale(static_cast<float>(zoom), static_cast<float>(zoom));
     drawDeadFlower(canvas, entity.equipFlags, 5.0, timeSeconds);
+    canvas.restore();
+}
+
+void WorldRenderer::drawCorpseName(Canvas& canvas, const RemoteEntity& entity,
+                                   const Camera& camera, Vec2 at) const {
+    if (!options.names || entity.isSelf()) return;
+
+    // Corpse art is fixed at radius 25 (see drawCorpse); hang the name in the
+    // same plate slot living flowers use, without the bar or level row.
+    const PlateBar bar = plateBar(1.0, camera, at);
+    ui::TextStyle style;
+    style.size = 12.0 * bar.zoom;
+    style.align = ui::Align::Left;
+    style.baseline = ui::Baseline::Alphabetic;
+    style.fill = kCorpseName;
+    canvas.save();
+    canvas.setGlobalAlpha(static_cast<float>(ui::kHudLayerAlpha));
+    if (entity.name.empty()) return;
+    ui::text(canvas, entity.name, bar.left, bar.top - 4.0 * bar.zoom, style);
     canvas.restore();
 }
 
@@ -3338,31 +3363,32 @@ const std::vector<std::uint16_t>& WorldRenderer::droppablePetals() const {
     return droppablePetals_;
 }
 
-void WorldRenderer::drawGarbagePile(Canvas& canvas, Vec2 at, double baseSize,
+void WorldRenderer::drawGarbagePile(Canvas& canvas, const MobDraw& mob, double diameter,
                                     double timeSeconds) const {
     const std::vector<std::uint16_t>& eligible = droppablePetals();
     if (eligible.empty() || !sprites_ || !content_) return;
 
-    // Seeded on where the pile stands, so every client builds the same pile out
-    // of the same petals without a byte of it crossing the wire.
-    const long long seed = static_cast<long long>(std::floor(at.x * 1000.0 + at.y * 1000.0));
-    const int count = 5 + static_cast<int>(((seed % 5) + 5) % 5);
+    // The pile moves as one body. A position seed would rebuild its petals
+    // whenever movement, knockback or interpolation changed the coordinates.
+    Rng layout(mob.netId);
+    const bool apex = mob.rarity == Rarity::Apex;
+    const int count = apex ? 9 : layout.rangeInt(5, 9);
+    const double bearing = layout.angle();
     for (int i = 0; i < count; ++i) {
-        const long long petalSeed = ((seed + i * 1000LL) % 1000000LL + 1000000LL) % 1000000LL;
-        const std::size_t pick = static_cast<std::size_t>(
-            static_cast<double>(petalSeed) / 1000000.0 * static_cast<double>(eligible.size()));
-        const std::uint16_t index = eligible[std::min(pick, eligible.size() - 1)];
-
-        const double angle = static_cast<double>(i) / count * kTau;
-        const double maxRadius = (baseSize * 0.5) * 0.8;
-        const double radius = maxRadius * (0.7 + static_cast<double>(petalSeed % 300) / 1000.0);
-        const double x = std::cos(angle) * radius;
-        const double y = std::sin(angle) * radius + (i % 3) * 3.0;
-        const double rotation = static_cast<double>(petalSeed % 360) * kPi / 180.0;
+        const std::uint16_t index = eligible[layout.below(
+            static_cast<std::uint32_t>(eligible.size()))];
         const PetalConfig& config = content_->petal(index);
-        const double size = baseSize * (0.6 + static_cast<double>(petalSeed % 200) / 1000.0) *
-                            config.size * petalArtScale(&config);
-        sprites_->drawPetal(canvas, index, Rarity::Common, x, y, size, rotation, timeSeconds);
+
+        const bool centre = apex && i == count - 1;
+        const double angle = bearing + i * kTau / (apex ? count - 1 : count);
+        const double radius = centre ? 0.0 : diameter *
+            (apex ? layout.range(0.23, 0.29) : layout.range(0.28, 0.40));
+        const double size = apex
+            ? diameter * clamp(0.39 * config.size * petalArtScale(&config), 0.28, 0.49)
+            : diameter * layout.range(0.6, 0.8) * config.size * petalArtScale(&config);
+        const double rotation = layout.angle();
+        sprites_->drawPetal(canvas, index, Rarity::Common, std::cos(angle) * radius,
+                            std::sin(angle) * radius, size, rotation, apex ? 0.0 : timeSeconds);
     }
 }
 
@@ -3574,13 +3600,11 @@ void WorldRenderer::drawMobBody(Canvas& canvas, const Camera& camera, const MobD
     static const std::string kNoId;
     const std::string& id = config ? config->id : kNoId;
     if (id == "garbage") {
-        // Its entry in mobs.json is an empty document: the pile IS the artwork,
-        // laid out in world units off the mob's COLLISION size -- the browser
-        // build sizes the pile from that and never from the death scale.
+        // The pile fades on death without the usual size expansion.
         canvas.save();
         canvas.translate(static_cast<float>(art.x), static_cast<float>(art.y));
         canvas.scale(static_cast<float>(mirrored ? -zoom : zoom), static_cast<float>(zoom));
-        drawGarbagePile(canvas, mob.position, mob.radius * 2.0, timeSeconds);
+        drawGarbagePile(canvas, mob, mob.radius * 2.0, timeSeconds);
         canvas.restore();
     } else if (id == "digger") {
         // A flower carrying a cutter rather than a bug, the way gardn draws it.
@@ -3719,7 +3743,8 @@ void WorldRenderer::drawMobLabel(Canvas& canvas, const Camera& camera, const Mob
         // Above the bar, from the left end of its track -- or, when the name is
         // longer than the whole track, centred over it.
         static const std::string kUnknownMob = "?";
-        const std::string& name = config ? config->name : kUnknownMob;
+        const std::string name =
+            config ? std::string(ui::mobNameTr(config->id, config->name.c_str())) : kUnknownMob;
         const double nameBox = boxWidth(name, kMobNameSize);
         label(name, kMobNameSize, ui::kPaper, nameBox >= halfSpan * 2.0 ? -nameBox * 0.5 : -halfSpan,
               lineY - kMobNameRaise);
@@ -3738,14 +3763,14 @@ void WorldRenderer::drawMobLabel(Canvas& canvas, const Camera& camera, const Mob
     const double rowY = lineY + kMobTierDrop;
     double tierFloor = -1e300;
     if (labelled && mob.pet && (options.healthBars || options.names)) {
-        const std::string summon = kPetLabel;
+        const std::string summon = ui::tipSummon();
         const double box = boxWidth(summon, kMobTierSize);
         const double left = std::min(-halfSpan, -1.0 - box);
         label(summon, kMobTierSize, kPetLabelColor, left, rowY);
         tierFloor = left + box + 1.0;
     }
     if (labelled && options.names) {
-        const std::string tier = rarityLabel(mob.rarity);
+        const std::string tier = ui::rarityTr(mob.rarity);
         const double box = boxWidth(tier, kMobTierSize);
         label(tier, kMobTierSize, rarityColor(mob.rarity), std::max(tierFloor, halfSpan - box),
               rowY);
@@ -3870,8 +3895,9 @@ void WorldRenderer::drawEntity(Canvas& canvas, const RemoteEntity& entity, const
     switch (entity.kind) {
         case net::EntityKind::Player:
             if (entity.dead()) {
-                // A corpse carries none of the living furniture: no plate, no
-                // bar, no level, no petals.
+                // Corpse body has no bar / level / petals; the name stays so a
+                // downed teammate can still be found for revive.
+                drawCorpseName(canvas, entity, camera, at);
                 drawCorpse(canvas, entity, camera, at, timeSeconds);
                 break;
             }
