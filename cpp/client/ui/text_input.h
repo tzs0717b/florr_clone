@@ -270,6 +270,11 @@ inline double keyboardLift(Rect field, double viewHeight, double overlap, double
 bool editText(Window&, std::string& value, TextFieldState&, double timeSeconds,
               const TextEditOptions& options = {});
 
+/// The box a press has to land in to focus a one-line field: the field
+/// itself for a mouse, and a little taller for a finger (see the definition).
+/// What is drawn, and what the keyboard lift keeps in view, stay `box`.
+Rect fieldTouchTarget(Rect box, const Window& window);
+
 /// One single-line field's pointer handling: a press inside `box` focuses it
 /// and places the caret, a drag extends the selection, a double-click takes
 /// the word under it and a third click the whole value. A press outside blurs.

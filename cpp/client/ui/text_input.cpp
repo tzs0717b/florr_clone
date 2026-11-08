@@ -427,7 +427,10 @@ TextFieldRegions& TextFieldRegions::instance() {
 bool trackTextMouse(Window& window, TextFieldState& state, Rect box, const TextRun& run,
                     const std::string& value, double timeSeconds) {
     const Vec2 mouse{window.mouseX(), window.mouseY()};
-    TextFieldRegions::instance().record(box);
+    // The taller finger target is what the window has to know about: it
+    // decides whether a tap is on a field (and so raises the keyboard inside
+    // the tap, which is the only time iOS lets a page do it) as the tap lands.
+    TextFieldRegions::instance().record(fieldTouchTarget(box, window));
     if (state.focused) TextFieldRegions::instance().recordFocused(box);
 
     if (state.dragging) {
@@ -455,11 +458,25 @@ bool trackTextMouse(Window& window, TextFieldState& state, Rect box, const TextR
     }
 
     if (!window.mousePressed(MouseButton::Left)) return false;
-    if (!box.contains(mouse)) {
+    if (!fieldTouchTarget(box, window).contains(mouse)) {
         state.blur();
         return false;
     }
     return pressAt(window, state, indexAtX(run, mouse.x), value, timeSeconds, true);
+}
+
+Rect fieldTouchTarget(Rect box, const Window& window) {
+    if (!window.pointerIsTouch()) return box;
+    // A one-line field is 24-28 units tall: about 20 points on an iPad held
+    // sideways and 12 on a phone, well under a fingertip. The search boxes
+    // the panels grew (talents, codex, bag, crafting, skins) sit in rows of
+    // their own, so a finger that lands a little above or below one still
+    // meant it. Grown towards 44 points but by no more than kSlack a side,
+    // so it never reaches far into whatever is laid out next to it.
+    constexpr double kSlack = 8.0;
+    const double wanted = 44.0 * window.unitsPerPoint();
+    const double pad = std::clamp((wanted - box.h) * 0.5, 0.0, kSlack);
+    return {box.x, box.y - pad, box.w, box.h + pad * 2.0};
 }
 
 namespace {
