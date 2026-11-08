@@ -169,7 +169,7 @@ bool MobileControls::onStick(double x, double y) const {
     // steering. It stops at the loadout bar's top edge.
     const double padBottom = std::min(stickCentre_.y + stickR + 96.0 * scale_, barTop_);
     return x >= stickCentre_.x - stickR && x <= stickCentre_.x + stickR &&
-           y >= stickCentre_.y && y <= padBottom;
+           y >= stickCentre_.y && y < padBottom;
 }
 
 bool MobileControls::hits(double x, double y) const {

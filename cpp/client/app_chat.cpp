@@ -31,6 +31,7 @@
 #include <cstdlib>
 #include <utility>
 
+#include "client/ui/chat_layout.h"
 #include "client/ui/draw.h"
 #include "client/ui/i18n.h"
 #include "client/ui/remote_image.h"
@@ -49,14 +50,9 @@ using namespace flix::ui;
 namespace {
 
 // The box is pinned to the bottom-left corner, so every height here is
-// measured up from the BOTTOM of the window.
-//
-// The panel the transcript sits on while the box is open. Its left edge is
-// the tab strip's too.
-constexpr double kChatX = 96.0;
-constexpr double kChatPanelWidth = 558.0;
-constexpr double kChatPanelUp = 349.0;        ///< top of the panel, from the bottom edge
-constexpr double kChatPanelDown = 49.0;       ///< bottom of the panel, from the bottom edge
+// measured up from the BOTTOM of the window. Where the panel, the strip and
+// the input sit is ui::chatLayout (client/ui/chat_layout.h), shared with the
+// touch HUD's tests; what is here is how they are drawn.
 constexpr double kChatPanelRadius = 4.0;
 /// Black at this alpha, for the panel and every tab alike.
 constexpr double kChatPlateAlpha = 0.3;
@@ -73,8 +69,6 @@ constexpr double kChatLastBaselineUp = 8.0;
 constexpr double kChatFirstBaselineDown = 17.0;
 
 /// The channel strip over the panel.
-constexpr double kChatTabsUp = 378.0;         ///< top of the strip, from the bottom edge
-constexpr double kChatTabHeight = 24.0;
 constexpr double kChatTabGap = 8.4;
 constexpr double kChatTabRadius = 3.0;
 constexpr double kChatTabLabelSize = 14.0;
@@ -90,12 +84,6 @@ constexpr double kChatCheckEdge = 2.5;
 constexpr std::uint32_t kChatCheckFrame = 0x333333u;
 constexpr std::uint32_t kChatCheckFill = 0xDDDDDDu;
 
-/// The input, under the panel's left edge. Its bottom sits 20 up; the panel
-/// and the strip sit on top of it, so a change to its height moves them too.
-constexpr double kChatFieldX = 100.0;
-constexpr double kChatFieldUp = 44.0;         ///< top of the input, from the bottom edge
-constexpr double kChatFieldWidth = 257.0;
-constexpr double kChatFieldHeight = 24.0;
 
 /// A sender's name on Local and on the server's own named lines.
 constexpr std::uint32_t kChatAuthorGrey = 0xBBBBBBu;
@@ -977,21 +965,20 @@ void App::sendChatLine(const std::string& line) {
     net_.sendChat(chatChannelCommand(chatSendTab_, net_.whisperPartner()) + line);
 }
 
+ui::ChatLayout App::chatBoxLayout(double viewHeight) const {
+    if (touchControlsVisible() && mobile_.stickHitRadius() > 0.0) {
+        return ui::chatLayout(viewHeight, mobile_.stickCentre(), mobile_.stickHitRadius());
+    }
+    return ui::chatLayout(viewHeight);
+}
+
 Rect App::titleChatBox(int viewWidth, int viewHeight) {
     (void)viewWidth;
     // Bottom-left, clear of the icon column, under the transcript's left edge.
     // Fixed rather than derived, and the same slot the game draws, so both
     // read it from here. With touch controls up, lift it clear of the stick
     // the same way drawChat does.
-    Rect field{kChatFieldX, viewHeight - kChatFieldUp, kChatFieldWidth, kChatFieldHeight};
-    if (touchControlsVisible() && mobile_.stickHitRadius() > 0.0) {
-        constexpr double kGap = 12.0;
-        constexpr double kMobileFieldWidth = 220.0;
-        field.w = kMobileFieldWidth;
-        field.y = mobile_.stickCentre().y - mobile_.stickHitRadius() - kGap - field.h;
-        if (field.y < 8.0) field.y = 8.0;
-    }
-    return field;
+    return chatBoxLayout(viewHeight).field;
 }
 
 void App::drawTitleChat(Canvas& canvas, double time) {
@@ -1114,34 +1101,16 @@ bool App::handleClientCommand(const std::string& message) {
 
 void App::drawChat(Canvas& canvas, double time) {
     const double bottom = canvas.height();
-    Rect panel{kChatX, bottom - kChatPanelUp, kChatPanelWidth,
-               kChatPanelUp - kChatPanelDown};
-    Rect field{kChatFieldX, bottom - kChatFieldUp, kChatFieldWidth, kChatFieldHeight};
-    // Touch HUD: the closed slot used to sit under the thumb's path into the
-    // stick (AshFlor lifts chat above the joystick for the same reason). Park
-    // the field above the stick's hit ring and shorten the transcript so it
-    // does not cover the knob.
-    if (touchControlsVisible() && mobile_.stickHitRadius() > 0.0) {
-        constexpr double kGap = 12.0;
-        constexpr double kMobileFieldWidth = 220.0;
-        constexpr double kMobilePanelHeight = 180.0;
-        field.w = kMobileFieldWidth;
-        field.y = mobile_.stickCentre().y - mobile_.stickHitRadius() - kGap - field.h;
-        if (field.y < 8.0) field.y = 8.0;
-        const double panelBottom = field.y - 8.0;
-        const double panelTop = std::max(8.0, panelBottom - kMobilePanelHeight);
-        if (panelBottom > panelTop + 40.0) {
-            panel = {kChatX, panelTop, kChatPanelWidth, panelBottom - panelTop};
-        }
-    }
+    // Touch HUD: the box stands clear of the stick (see ui::chatLayout).
+    const ChatLayout box = chatBoxLayout(bottom);
+    const Rect panel = box.panel;
+    const Rect field = box.field;
     const Rect column{panel.x + kChatTextInset, panel.y, panel.w - kChatTextInset * 2, panel.h};
     // The transcript, the strip over it while it is up, and the line under
     // it, as one box. A press outside it closes the chat, and a press inside
     // must not -- selecting a message and picking a channel are both done
     // with the box open.
-    const double regionTop = chatOpen_ ? std::min(bottom - kChatTabsUp, panel.y - kChatTabHeight - 4.0)
-                                       : panel.y;
-    chatRegion_ = {panel.x, regionTop, panel.w, field.bottom() - regionTop};
+    chatRegion_ = box.region(chatOpen_);
     // For the wheel, which runs before this draw and needs last frame's box.
     chatColumn_ = panel;
 
@@ -1154,14 +1123,8 @@ void App::drawChat(Canvas& canvas, double time) {
                          static_cast<float>(kChatPanelRadius));
         setFill(canvas, kInk, kChatPlateAlpha);
         canvas.fill();
-        // Tabs sit just above the panel. On mobile the panel is lifted, so the
-        // desktop "from the bottom edge" offset would leave them over the stick.
-        // drawChatTabs places the strip at `ref - kChatTabsUp`.
-        const double tabsRef =
-            (touchControlsVisible() && mobile_.stickHitRadius() > 0.0)
-                ? (panel.y - 4.0 - kChatTabHeight + kChatTabsUp)
-                : bottom;
-        drawChatTabs(canvas, tabsRef);
+        // Tabs sit just above the panel, wherever the panel is.
+        drawChatTabs(canvas, box.tabsTop + kChatTabsUp);
     }
 
     // A leading slash swaps the transcript for the command list -- the

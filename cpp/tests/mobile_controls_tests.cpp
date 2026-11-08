@@ -1,5 +1,6 @@
 #include "test.h"
 
+#include "client/ui/chat_layout.h"
 #include "client/ui/menus.h"
 #include "client/ui/mobile_controls.h"
 
@@ -256,59 +257,103 @@ TEST(the_row_swap_button_stands_to_the_left_of_retract) {
     CHECK_NEAR(rowSwap.y, retract.y, 1e-9);
 }
 
-TEST(one_press_of_the_row_swap_button_is_one_swap) {
-    // It stands in for a key's press, not for a key being held: a thumb that
-    // stays down must not go on swapping the rows back and forth.
+TEST(one_tap_of_the_row_swap_button_is_one_swap) {
+    // It stands in for a key's press, not for a key being held, and it fires
+    // on the lift (the hold is the preset bank's): a thumb that stays down
+    // must not go on swapping the rows back and forth.
     Fixture f;
     const Vec2 at = f.controls.rowSwapCentre();
-    CHECK(!f.controls.takeRowSwap());
+    CHECK(!f.controls.consumeSwapRowsTap());
 
     f.feed({began(1, at.x, at.y)});
     CHECK(f.controls.rowSwapPressed());
     CHECK(!f.controls.attackPressed());
     CHECK(!f.controls.retractPressed());
-    CHECK(f.controls.takeRowSwap());
-    CHECK(!f.controls.takeRowSwap());
+    CHECK(!f.controls.consumeSwapRowsTap());
 
     // Drifting, and another finger landing on the held button, press nothing.
-    f.feed({moved(1, at.x + 200.0, at.y), began(2, at.x, at.y)});
+    f.feed({moved(1, at.x + 200.0, at.y), began(2, at.x, at.y)}, 0.05);
     CHECK(f.controls.rowSwapPressed());
-    CHECK(!f.controls.takeRowSwap());
+    CHECK(!f.controls.consumeSwapRowsTap());
 
-    // Only the finger that took it lets go of it, and the next press counts.
-    f.feed({ended(2, at.x, at.y)});
+    // Only the finger that took it lets go of it.
+    f.feed({ended(2, at.x, at.y)}, 0.05);
     CHECK(f.controls.rowSwapPressed());
-    f.feed({ended(1, at.x + 200.0, at.y)});
+    CHECK(!f.controls.consumeSwapRowsTap());
+    f.feed({ended(1, at.x + 200.0, at.y)}, 0.05);
     CHECK(!f.controls.rowSwapPressed());
-    CHECK(!f.controls.takeRowSwap());
-    f.feed({began(3, at.x, at.y)});
-    CHECK(f.controls.takeRowSwap());
+    CHECK(f.controls.consumeSwapRowsTap());
+    CHECK(!f.controls.consumeSwapRowsTap());
+
+    // And the next tap counts again.
+    f.feed({began(3, at.x, at.y)}, 0.05);
+    f.feed({ended(3, at.x, at.y)}, 0.05);
+    CHECK(f.controls.consumeSwapRowsTap());
 }
 
 TEST(reset_drops_a_row_swap_nothing_has_acted_on) {
-    // A press from the frame a panel opened must not swap the rows behind it.
+    // A tap from the frame a panel opened must not swap the rows behind it.
     Fixture f;
     const Vec2 at = f.controls.rowSwapCentre();
     f.feed({began(1, at.x, at.y)});
+    f.feed({ended(1, at.x, at.y)}, 0.05);
     f.controls.reset();
     CHECK(!f.controls.rowSwapPressed());
-    CHECK(!f.controls.takeRowSwap());
+    CHECK(!f.controls.consumeSwapRowsTap());
+}
+
+TEST(a_row_swap_finger_lost_with_the_page_is_not_a_tap) {
+    // releaseLost lets go of a finger the window dropped without an end; the
+    // lift happened somewhere the page cannot see, so it is not a tap.
+    Fixture f;
+    const Vec2 at = f.controls.rowSwapCentre();
+    f.feed({began(1, at.x, at.y)});
+    f.controls.releaseLost({});
+    CHECK(!f.controls.rowSwapPressed());
+    CHECK(!f.controls.consumeSwapRowsTap());
+    CHECK(!f.controls.presetsHeld());
 }
 
 TEST(the_controls_sit_clear_of_the_hud_they_share_the_bottom_of_the_screen_with) {
     // The three things already anchored to the bottom of a game: the loadout
-    // bar across the middle, the icon column at x <= 73, and the chat column
-    // from x = 115 to 385 in the last 195 units of height. A control that
-    // overlapped any of them would take that element's taps.
+    // bar across the middle, the icon column at x <= 73, and the chat box --
+    // which, with the controls up, is the one that moves: its open panel is
+    // 558 wide and 300 tall, and hung from the bottom edge it would cover the
+    // stick. A control that overlapped any of them would take that element's
+    // taps, or the box would take the thumb meant for the stick.
     Fixture f;
-    const double chatTop = kPhoneHeight - 195.0;
     const double barTop = kPhoneHeight - inGameLoadoutBarHeight();
+    const ChatLayout chat = chatLayout(kPhoneHeight, f.controls.stickCentre(),
+                                       f.controls.stickHitRadius());
+    CHECK(chat.lifted);
+    // Open, the box is its biggest: the strip, the panel and the slot.
+    const Rect box = chat.region(true);
 
     for (const Vec2& p : hitPoints(f.controls)) {
-        CHECK(p.x > 73.0);                         // the icon column
-        CHECK(!(p.y >= chatTop && p.x <= 385.0));  // the chat column
-        CHECK(p.y < barTop);                       // the loadout bar
+        CHECK(p.x > 73.0);          // the icon column
+        CHECK(!box.contains(p));    // the chat box, open or closed
+        CHECK(p.y < barTop);        // the loadout bar
     }
+}
+
+TEST(the_lifted_chat_box_still_has_a_transcript_and_stays_on_screen) {
+    // Lifting the box must not lift it off the top, or squash the transcript
+    // to nothing on an ordinary landscape phone.
+    for (const int height : {kPhoneHeight, 1080, 700}) {
+        MobileControls controls;
+        controls.layout(kPhoneWidth, height, inGameLoadoutBarHeight());
+        const ChatLayout chat =
+            chatLayout(height, controls.stickCentre(), controls.stickHitRadius());
+        CHECK(chat.tabsTop >= 0.0);
+        CHECK(chat.panel.h >= kChatTouchMinPanel);
+        CHECK(chat.field.bottom() <= controls.stickCentre().y - controls.stickHitRadius());
+        CHECK(chat.panel.bottom() <= chat.field.y);
+    }
+    // Without the controls the box is where it always was.
+    const ChatLayout desk = chatLayout(kPhoneHeight);
+    CHECK(!desk.lifted);
+    CHECK_NEAR(desk.panel.y, kPhoneHeight - kChatPanelUp, 1e-9);
+    CHECK_NEAR(desk.field.y, kPhoneHeight - kChatFieldUp, 1e-9);
 }
 
 TEST(every_point_the_controls_answer_for_belongs_to_exactly_one_of_them) {
@@ -473,15 +518,18 @@ TEST(tablet_controls_sit_clear_of_the_hud_in_either_orientation) {
         MobileControls controls;
         controls.layout(screen.width, screen.height, inGameLoadoutBarHeight(),
                         screen.unitsPerPoint);
-        const double chatTop = screen.height - 195.0;
         const double barTop = screen.height - inGameLoadoutBarHeight();
+        const ChatLayout chat = chatLayout(screen.height, controls.stickCentre(),
+                                           controls.stickHitRadius());
+        const Rect box = chat.region(true);
+        CHECK(chat.tabsTop >= 0.0);
         int probed = 0;
         for (double y = 0; y < screen.height; y += 3.0) {
             for (double x = 0; x < screen.width; x += 3.0) {
                 if (!controls.hits(x, y)) continue;
                 ++probed;
                 CHECK(x > 73.0);
-                CHECK(!(y >= chatTop && x <= 385.0));
+                CHECK(!box.contains({x, y}));
                 CHECK(y < barTop);
 
                 controls.reset();

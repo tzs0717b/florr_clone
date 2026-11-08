@@ -24,6 +24,7 @@
 
 #include "client/camera.h"
 #include "client/net_client.h"
+#include "client/ui/chat_layout.h"
 #include "client/ui/context_menu.h"
 #include "client/ui/text_select.h"
 #include "client/render/darkness.h"
@@ -240,6 +241,9 @@ private:
     /// The title screen's chat line, bottom-left, under the icon column.
     /// Instance (not static): with touch controls up it lifts clear of the stick.
     Rect titleChatBox(int viewWidth, int viewHeight);
+    /// The chat box for this view: hung from the bottom edge, or with the
+    /// touch controls up, lifted clear of the stick. See ui::chatLayout.
+    ui::ChatLayout chatBoxLayout(double viewHeight) const;
     void drawTitleChat(Canvas&, double time);
     /// The daily-login card, top-right. Painted last, over the panels, exactly
     /// as the browser build's own always-on-top widget is.
