@@ -447,8 +447,11 @@ struct Bounty {
     double xp = 0;
     struct Share {
         Entity player = NULL_ENTITY;
-        net::ConnectionId owner = 0;
         double damage = 0;
+        /// The connection that dealt it (0: none), so a flower that died and
+        /// respawned as a new entity keeps one line in the ledger. Last, so a
+        /// two-field {player, damage} initializer still means what it says.
+        net::ConnectionId owner = 0;
     };
     std::vector<Share> contributors;
 
@@ -464,7 +467,7 @@ struct Bounty {
                 return;
             }
         }
-        contributors.push_back({player, owner, damage});
+        contributors.push_back({player, damage, owner});
     }
 };
 

@@ -52,8 +52,12 @@ inline int runAll() {
     const char* only = std::getenv("FLIX_TEST_FILTER");
     // `FLIX_TEST_TIMES=1` prints each case's wall time, to find the slow ones.
     const bool times = std::getenv("FLIX_TEST_TIMES") != nullptr;
+    // `FLIX_TEST_SKIP=<substring>` leaves out the cases whose name contains
+    // it -- one that takes the whole process down hides every case after it.
+    const char* skip = std::getenv("FLIX_TEST_SKIP");
     for (auto& c : cases()) {
         if (only != nullptr && std::string(c.name).find(only) == std::string::npos) continue;
+        if (skip != nullptr && *skip != '\0' && std::string(c.name).find(skip) != std::string::npos) continue;
         currentCase() = c.name;
         ++ran;
         const int before = failures();
